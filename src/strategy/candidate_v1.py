@@ -37,6 +37,7 @@ class CandidateV1Risk:
     # Start small; you can tune once execution is stable.
     risk_per_trade_pct: float = 0.02
     min_units: int = 1
+    max_units: int = 2000000
     units: int = 1000000
     stop_pips: float = 10.0
     take_profit_pips: float = 10.0
