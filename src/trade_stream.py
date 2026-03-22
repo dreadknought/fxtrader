@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import requests
+import urllib3
+
 from src.oanda.oanda_client import OandaApiError, OandaClient, load_oanda_config
 from src.strategy.candidate_v1 import CANDIDATE_V1, CANDIDATE_V1_RISK
 from src.strategy.gated_strategy import GateConfig, LiveState, evaluate_decision, update_state_from_tick
@@ -187,7 +190,6 @@ def _summarize_no_trade(*, rt: RuntimeState, gate: GateConfig, now_ny: datetime)
     Derive a human-readable diagnosis using the MR state at the time we exit.
     """
     s = rt.day_state
-    # If we never backfilled, we didn't even get to the "real" day.
     if not rt.asia_backfilled:
         return "no_asia_backfill"
 
@@ -202,7 +204,6 @@ def _summarize_no_trade(*, rt: RuntimeState, gate: GateConfig, now_ny: datetime)
     if s.first_sweep_side is None or s.first_sweep_time_ny is None:
         return "no_sweep_in_british_window"
 
-    # We had a sweep
     if s.max_penetration_pips > gate.max_sweep_depth_pips:
         return f"deep_sweep(max_penetration={s.max_penetration_pips:.2f}p > {gate.max_sweep_depth_pips}p)"
 
@@ -212,7 +213,6 @@ def _summarize_no_trade(*, rt: RuntimeState, gate: GateConfig, now_ny: datetime)
             return f"sweep_no_reentry_by_deadline(deadline={deadline})"
         return "sweep_seen_waiting_for_reentry"
 
-    # We got reentry but still no PASS (rare; usually means something inconsistent)
     d = evaluate_decision(state=s, gate=gate)
     return f"reentry_seen_but_no_pass(reason={d.reason})"
 
@@ -307,6 +307,262 @@ def _summarize_trade_pnl_from_transactions(
     return " | ".join(parts)
 
 
+def _process_stream_message(
+    *,
+    client: OandaClient,
+    cfg,
+    risk,
+    gate: GateConfig,
+    rt: RuntimeState,
+    msg: dict,
+    time_stop_minutes: int,
+    risk_pct: float,
+    min_units: int,
+    max_units: int,
+) -> tuple[RuntimeState, int | None]:
+    """
+    Process one pricing/heartbeat message.
+    Returns:
+      (rt, None) to keep running
+      (rt, exit_code) to stop the worker
+    """
+    msg_type = msg.get("type")
+    if msg_type not in {"PRICE", "HEARTBEAT"}:
+        return rt, None
+
+    ts_utc = _parse_tick_time_utc(msg)
+    if ts_utc is None:
+        return rt, None
+    now_ny = ts_utc.astimezone(NY)
+    trade_date_ny = now_ny.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if trade_date_ny.date() != rt.current_trade_date_ny.date():
+        rt = RuntimeState(current_trade_date_ny=trade_date_ny, day_state=LiveState())
+        print(f"\n--- New NY day: {trade_date_ny.date()} ---", flush=True)
+
+    asia_start_ny, asia_end_ny, brit_start_ny, brit_end_ny, _double_sweep_end_ny = build_session_windows_for_date(
+        rt.current_trade_date_ny
+    )
+
+    # Monitor after trading
+    if rt.traded and rt.trade_id and rt.trade_open_time_ny:
+        deadline = rt.trade_open_time_ny + timedelta(minutes=time_stop_minutes)
+
+        try:
+            open_now = _is_trade_open(client, rt.trade_id)
+        except Exception as e:
+            print(f"[MONITOR ERROR] {rt.current_trade_date_ny.date()} {e}", file=sys.stderr, flush=True)
+            time.sleep(5)
+            return rt, None
+
+        if not open_now:
+            print(f"[CLOSED] {rt.current_trade_date_ny.date()} trade {rt.trade_id} closed (SL/TP).", flush=True)
+            if rt.last_txn_id_snapshot:
+                try:
+                    summary = _summarize_trade_pnl_from_transactions(
+                        client=client,
+                        trade_id=rt.trade_id,
+                        since_id=rt.last_txn_id_snapshot,
+                        balance_snapshot=rt.balance_snapshot,
+                        nav_snapshot=rt.nav_for_sizing,
+                    )
+                    print(f"[P&L] {rt.current_trade_date_ny.date()} {summary}", flush=True)
+                except Exception as e:
+                    print(f"[P&L ERROR] {e}", file=sys.stderr, flush=True)
+            return rt, 0
+
+        if now_ny >= deadline:
+            try:
+                client.close_trade(trade_id=rt.trade_id)
+            except Exception as e:
+                print(f"[CLOSE ERROR] trade {rt.trade_id} {e}", file=sys.stderr, flush=True)
+                time.sleep(5)
+                return rt, None
+
+            print(
+                f"[CLOSE] {rt.current_trade_date_ny.date()} trade {rt.trade_id} closed due to +{time_stop_minutes}m time stop.",
+                flush=True,
+            )
+
+            time.sleep(2)
+            if not _is_trade_open(client, rt.trade_id):
+                print(f"[CLOSED] {rt.current_trade_date_ny.date()} trade {rt.trade_id} closed (time stop).", flush=True)
+                if rt.last_txn_id_snapshot:
+                    try:
+                        summary = _summarize_trade_pnl_from_transactions(
+                            client=client,
+                            trade_id=rt.trade_id,
+                            since_id=rt.last_txn_id_snapshot,
+                            balance_snapshot=rt.balance_snapshot,
+                            nav_snapshot=rt.nav_for_sizing,
+                        )
+                        print(f"[P&L] {rt.current_trade_date_ny.date()} {summary}", flush=True)
+                    except Exception as e:
+                        print(f"[P&L ERROR] {e}", file=sys.stderr, flush=True)
+                return rt, 0
+
+        return rt, None
+
+    # If British window ended and we never traded, exit with summary
+    if now_ny >= brit_end_ny:
+        diag = _summarize_no_trade(rt=rt, gate=gate, now_ny=now_ny)
+        _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
+        print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (British window ended). diag={diag}", flush=True)
+        return rt, 0
+
+    # Asia backfill at/after British window start
+    if (not rt.asia_backfilled) and (now_ny >= brit_start_ny):
+        try:
+            asia_high, asia_low = _backfill_asia_range_from_rest(client, cfg.instrument, rt.current_trade_date_ny)
+        except Exception as e:
+            print(f"[ASIA BACKFILL ERROR] {rt.current_trade_date_ny.date()} {e}", file=sys.stderr, flush=True)
+            return rt, None
+
+        rt.asia_backfilled = True
+        rt.day_state = LiveState(
+            asia_high=asia_high,
+            asia_low=asia_low,
+            first_sweep_side=rt.day_state.first_sweep_side,
+            first_sweep_time_ny=rt.day_state.first_sweep_time_ny,
+            max_penetration_pips=rt.day_state.max_penetration_pips,
+            reentry_time_ny=rt.day_state.reentry_time_ny,
+        )
+
+        asia_range_pips = (asia_high - asia_low) / PIP_VALUE
+        print(
+            f"[ASIA BACKFILLED] {rt.current_trade_date_ny.date()} hi={asia_high:.5f} lo={asia_low:.5f} range={asia_range_pips:.2f}p",
+            flush=True,
+        )
+
+        if asia_range_pips < cfg.gate_min_asia_range_pips:
+            _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
+            print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (asia_range too small).", flush=True)
+            return rt, 0
+
+        try:
+            acct = client.get_account_summary().get("account", {})
+            nav = _safe_float(acct.get("NAV"))
+            bal = _safe_float(acct.get("balance"))
+            last_txn = acct.get("lastTransactionID")
+            rt.nav_for_sizing = nav if nav is not None else bal
+            rt.balance_snapshot = bal
+            rt.last_txn_id_snapshot = str(last_txn) if last_txn is not None else None
+            print(
+                f"[ACCT SNAPSHOT] {rt.current_trade_date_ny.date()} NAV={rt.nav_for_sizing} balance={rt.balance_snapshot} lastTxn={rt.last_txn_id_snapshot}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[ACCT SNAPSHOT ERROR] {e}", file=sys.stderr, flush=True)
+            rt.nav_for_sizing = None
+            rt.balance_snapshot = None
+            rt.last_txn_id_snapshot = None
+
+    if msg_type != "PRICE":
+        return rt, None
+
+    px = _bid_ask_mid(msg)
+    if px is None:
+        return rt, None
+    bid, ask, mid = px
+
+    prev = rt.day_state
+
+    rt.day_state = update_state_from_tick(
+        state=rt.day_state,
+        tick_time_utc=ts_utc,
+        mid_price=mid,
+        trade_date_ny=rt.current_trade_date_ny,
+        gate=gate,
+    )
+
+    if prev.first_sweep_side is None and rt.day_state.first_sweep_side is not None:
+        _log_state("[SWEEP]", rt=rt, gate=gate, now_ny=now_ny)
+
+    if prev.reentry_time_ny is None and rt.day_state.reentry_time_ny is not None:
+        _log_state("[REENTRY]", rt=rt, gate=gate, now_ny=now_ny)
+
+    if rt.day_state.max_penetration_pips > cfg.gate_max_sweep_depth_pips:
+        _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
+        print(
+            f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (deep sweep {rt.day_state.max_penetration_pips:.2f}p).",
+            flush=True,
+        )
+        return rt, 0
+
+    if rt.day_state.first_sweep_time_ny is not None and rt.day_state.reentry_time_ny is None:
+        deadline = rt.day_state.first_sweep_time_ny + timedelta(minutes=cfg.reentry_deadline_minutes)
+        if now_ny > deadline:
+            _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
+            print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (reentry missed).", flush=True)
+            return rt, 0
+
+    decision = evaluate_decision(state=rt.day_state, gate=gate)
+    if decision.reason != "PASS":
+        return rt, None
+
+    if decision.first_sweep_side == "HIGH":
+        is_long = False
+    elif decision.first_sweep_side == "LOW":
+        is_long = True
+    else:
+        _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
+        print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (invalid sweep side).", flush=True)
+        return rt, 0
+
+    if rt.nav_for_sizing is None:
+        print("[EXIT] Missing NAV snapshot (account summary) — refusing to place trade.", flush=True)
+        return rt, 2
+
+    raw_units = _compute_units_from_nav(nav_usd=rt.nav_for_sizing, stop_pips=risk.stop_pips, risk_pct=risk_pct)
+    sized_units = max(min_units, min(max_units, abs(raw_units)))
+    units = sized_units if is_long else -sized_units
+
+    sl, tp = _sl_tp_from_mid(mid, is_long=is_long, stop_pips=risk.stop_pips, tp_pips=risk.take_profit_pips)
+    tag = f"fxtrader_candidate_v1_{rt.current_trade_date_ny.date()}"
+
+    print(
+        f"[SIZING] NAV={rt.nav_for_sizing:.2f} risk_pct={risk_pct:.4f} stop_pips={risk.stop_pips:.2f} "
+        f"raw_units={raw_units} clamped_units={sized_units}",
+        flush=True,
+    )
+
+    try:
+        open_before = _trade_ids_snapshot(client)
+    except Exception:
+        open_before = set()
+
+    try:
+        resp = client.place_market_order(
+            instrument=cfg.instrument,
+            units=units,
+            stop_loss_price=sl,
+            take_profit_price=tp,
+            client_tag=tag,
+        )
+    except OandaApiError as e:
+        print(f"[ORDER ERROR] {rt.current_trade_date_ny.date()} {e}", file=sys.stderr, flush=True)
+        return rt, None
+
+    trade_id = _extract_trade_id(resp) or _find_new_trade_id_by_diff(client, before_ids=open_before)
+    if not trade_id:
+        print(f"[ORDER WARN] Order placed but could not determine trade_id. resp_keys={list(resp.keys())}", flush=True)
+        return rt, 2
+
+    rt.traded = True
+    rt.trade_id = trade_id
+    rt.trade_open_time_ny = now_ny
+
+    print(
+        f"[ORDER PASS] {rt.current_trade_date_ny.date()} trade_id={trade_id} side={'LONG' if is_long else 'SHORT'} units={units} "
+        f"bid={bid:.5f} ask={ask:.5f} mid={mid:.5f} SL={sl:.5f} TP={tp:.5f} "
+        f"asia_range_pips={decision.asia_range_pips:.2f} sweep_depth_pips={decision.sweep_depth_pips:.2f} "
+        f"sweep={decision.first_sweep_side}@{decision.first_sweep_time_ny} reentry={decision.reentry_time_ny}",
+        flush=True,
+    )
+
+    return rt, None
+
+
 def main() -> int:
     cfg = CANDIDATE_V1
     risk = CANDIDATE_V1_RISK
@@ -321,7 +577,6 @@ def main() -> int:
     oanda_cfg = load_oanda_config()
     client = OandaClient(oanda_cfg)
 
-    # Risk fields (must exist in candidate_v1.py for sizing)
     risk_pct = float(getattr(risk, "risk_per_trade_pct"))
     min_units = int(getattr(risk, "min_units", 1))
     max_units_raw = getattr(risk, "max_units", None)
@@ -345,250 +600,82 @@ def main() -> int:
     rt = RuntimeState(current_trade_date_ny=today_ny, day_state=LiveState())
 
     time_stop_minutes = 90
+    consecutive_stream_failures = 0
 
-    for msg in client.stream_pricing(instruments=cfg.instrument):
-        msg_type = msg.get("type")
-        if msg_type not in {"PRICE", "HEARTBEAT"}:
-            continue
+    while True:
+        now_ny = datetime.now(tz=NY)
 
-        ts_utc = _parse_tick_time_utc(msg)
-        if ts_utc is None:
-            continue
-        now_ny = ts_utc.astimezone(NY)
-        trade_date_ny = now_ny.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        if trade_date_ny.date() != rt.current_trade_date_ny.date():
-            rt = RuntimeState(current_trade_date_ny=trade_date_ny, day_state=LiveState())
-            print(f"\n--- New NY day: {trade_date_ny.date()} ---", flush=True)
-
-        asia_start_ny, asia_end_ny, brit_start_ny, brit_end_ny, _double_sweep_end_ny = build_session_windows_for_date(
+        # If we're past the British window and no trade is open, there is no point reconnecting forever.
+        _asia_start_ny, _asia_end_ny, _brit_start_ny, brit_end_ny, _double_sweep_end_ny = build_session_windows_for_date(
             rt.current_trade_date_ny
         )
-
-        # Monitor after trading
-        if rt.traded and rt.trade_id and rt.trade_open_time_ny:
-            deadline = rt.trade_open_time_ny + timedelta(minutes=time_stop_minutes)
-
-            try:
-                open_now = _is_trade_open(client, rt.trade_id)
-            except Exception as e:
-                print(f"[MONITOR ERROR] {rt.current_trade_date_ny.date()} {e}", file=sys.stderr, flush=True)
-                time.sleep(5)
-                continue
-
-            if not open_now:
-                print(f"[CLOSED] {rt.current_trade_date_ny.date()} trade {rt.trade_id} closed (SL/TP).", flush=True)
-                if rt.last_txn_id_snapshot:
-                    try:
-                        summary = _summarize_trade_pnl_from_transactions(
-                            client=client,
-                            trade_id=rt.trade_id,
-                            since_id=rt.last_txn_id_snapshot,
-                            balance_snapshot=rt.balance_snapshot,
-                            nav_snapshot=rt.nav_for_sizing,
-                        )
-                        print(f"[P&L] {rt.current_trade_date_ny.date()} {summary}", flush=True)
-                    except Exception as e:
-                        print(f"[P&L ERROR] {e}", file=sys.stderr, flush=True)
-                return 0
-
-            if now_ny >= deadline:
-                try:
-                    client.close_trade(trade_id=rt.trade_id)
-                except Exception as e:
-                    print(f"[CLOSE ERROR] trade {rt.trade_id} {e}", file=sys.stderr, flush=True)
-                    time.sleep(5)
-                    continue
-
-                print(f"[CLOSE] {rt.current_trade_date_ny.date()} trade {rt.trade_id} closed due to +{time_stop_minutes}m time stop.", flush=True)
-
-                time.sleep(2)
-                if not _is_trade_open(client, rt.trade_id):
-                    print(f"[CLOSED] {rt.current_trade_date_ny.date()} trade {rt.trade_id} closed (time stop).", flush=True)
-                    if rt.last_txn_id_snapshot:
-                        try:
-                            summary = _summarize_trade_pnl_from_transactions(
-                                client=client,
-                                trade_id=rt.trade_id,
-                                since_id=rt.last_txn_id_snapshot,
-                                balance_snapshot=rt.balance_snapshot,
-                                nav_snapshot=rt.nav_for_sizing,
-                            )
-                            print(f"[P&L] {rt.current_trade_date_ny.date()} {summary}", flush=True)
-                        except Exception as e:
-                            print(f"[P&L ERROR] {e}", file=sys.stderr, flush=True)
-                    return 0
-
-            continue
-
-        # If British window ended and we never traded, exit with summary
-        if now_ny >= brit_end_ny:
+        if now_ny >= brit_end_ny and not (rt.traded and rt.trade_id):
             diag = _summarize_no_trade(rt=rt, gate=gate, now_ny=now_ny)
             _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
-            print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (British window ended). diag={diag}", flush=True)
+            print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (stream loop past British window). diag={diag}", flush=True)
             return 0
 
-        # Asia backfill at/after British window start
-        if (not rt.asia_backfilled) and (now_ny >= brit_start_ny):
-            try:
-                asia_high, asia_low = _backfill_asia_range_from_rest(client, cfg.instrument, rt.current_trade_date_ny)
-            except Exception as e:
-                print(f"[ASIA BACKFILL ERROR] {rt.current_trade_date_ny.date()} {e}", file=sys.stderr, flush=True)
-                continue
-
-            rt.asia_backfilled = True
-            rt.day_state = LiveState(
-                asia_high=asia_high,
-                asia_low=asia_low,
-                first_sweep_side=rt.day_state.first_sweep_side,
-                first_sweep_time_ny=rt.day_state.first_sweep_time_ny,
-                max_penetration_pips=rt.day_state.max_penetration_pips,
-                reentry_time_ny=rt.day_state.reentry_time_ny,
-            )
-
-            asia_range_pips = (asia_high - asia_low) / PIP_VALUE
+        try:
             print(
-                f"[ASIA BACKFILLED] {rt.current_trade_date_ny.date()} hi={asia_high:.5f} lo={asia_low:.5f} range={asia_range_pips:.2f}p",
+                f"[STREAM CONNECT] {datetime.now(tz=NY).isoformat()} "
+                f"date={rt.current_trade_date_ny.date()} traded={rt.traded} trade_id={rt.trade_id}",
                 flush=True,
             )
-
-            if asia_range_pips < cfg.gate_min_asia_range_pips:
-                _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
-                print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (asia_range too small).", flush=True)
-                return 0
-
-            # Snapshot NAV/balance/lastTransactionID immediately after Asia backfill
-            try:
-                acct = client.get_account_summary().get("account", {})
-                nav = _safe_float(acct.get("NAV"))
-                bal = _safe_float(acct.get("balance"))
-                last_txn = acct.get("lastTransactionID")
-                rt.nav_for_sizing = nav if nav is not None else bal
-                rt.balance_snapshot = bal
-                rt.last_txn_id_snapshot = str(last_txn) if last_txn is not None else None
-                print(
-                    f"[ACCT SNAPSHOT] {rt.current_trade_date_ny.date()} NAV={rt.nav_for_sizing} balance={rt.balance_snapshot} lastTxn={rt.last_txn_id_snapshot}",
-                    flush=True,
+            for msg in client.stream_pricing(instruments=cfg.instrument):
+                consecutive_stream_failures = 0
+                rt, exit_code = _process_stream_message(
+                    client=client,
+                    cfg=cfg,
+                    risk=risk,
+                    gate=gate,
+                    rt=rt,
+                    msg=msg,
+                    time_stop_minutes=time_stop_minutes,
+                    risk_pct=risk_pct,
+                    min_units=min_units,
+                    max_units=max_units,
                 )
-            except Exception as e:
-                print(f"[ACCT SNAPSHOT ERROR] {e}", file=sys.stderr, flush=True)
-                rt.nav_for_sizing = None
-                rt.balance_snapshot = None
-                rt.last_txn_id_snapshot = None
+                if exit_code is not None:
+                    return exit_code
 
-        # If this isn't a PRICE update, keep looping (time checks still run)
-        if msg_type != "PRICE":
-            continue
+            print("[STREAM END] pricing stream ended cleanly; reconnecting.", flush=True)
+            time.sleep(1)
 
-        px = _bid_ask_mid(msg)
-        if px is None:
-            continue
-        bid, ask, mid = px
-
-        # Detect sweep/reentry events by comparing before/after state updates
-        prev = rt.day_state
-
-        rt.day_state = update_state_from_tick(
-            state=rt.day_state,
-            tick_time_utc=ts_utc,
-            mid_price=mid,
-            trade_date_ny=rt.current_trade_date_ny,
-            gate=gate,
-        )
-
-        # Log first sweep occurrence once
-        if prev.first_sweep_side is None and rt.day_state.first_sweep_side is not None:
-            _log_state("[SWEEP]", rt=rt, gate=gate, now_ny=now_ny)
-
-        # Log reentry occurrence once
-        if prev.reentry_time_ny is None and rt.day_state.reentry_time_ny is not None:
-            _log_state("[REENTRY]", rt=rt, gate=gate, now_ny=now_ny)
-
-        # Early no-trade exits with summary
-        if rt.day_state.max_penetration_pips > cfg.gate_max_sweep_depth_pips:
-            _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
+        except (
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.ConnectionError,
+            urllib3.exceptions.ProtocolError,
+        ) as e:
+            consecutive_stream_failures += 1
             print(
-                f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (deep sweep {rt.day_state.max_penetration_pips:.2f}p).",
+                f"[STREAM DROPPED] {datetime.now(tz=NY).isoformat()} "
+                f"failure={consecutive_stream_failures} err={type(e).__name__}: {e}",
+                file=sys.stderr,
                 flush=True,
             )
-            return 0
 
-        if rt.day_state.first_sweep_time_ny is not None and rt.day_state.reentry_time_ny is None:
-            deadline = rt.day_state.first_sweep_time_ny + timedelta(minutes=cfg.reentry_deadline_minutes)
-            if now_ny > deadline:
-                _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
-                print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (reentry missed).", flush=True)
-                return 0
+            if consecutive_stream_failures >= 10:
+                print("[STREAM ABORT] Too many consecutive stream failures.", file=sys.stderr, flush=True)
+                return 2
 
-        decision = evaluate_decision(state=rt.day_state, gate=gate)
-        if decision.reason != "PASS":
+            time.sleep(min(10, 1 + consecutive_stream_failures))
             continue
 
-        # Direction: sweep HIGH => SHORT, sweep LOW => LONG
-        if decision.first_sweep_side == "HIGH":
-            is_long = False
-        elif decision.first_sweep_side == "LOW":
-            is_long = True
-        else:
-            _log_state("[NO TRADE SUMMARY]", rt=rt, gate=gate, now_ny=now_ny)
-            print(f"[EXIT] {rt.current_trade_date_ny.date()} no trade today (invalid sweep side).", flush=True)
-            return 0
-
-        if rt.nav_for_sizing is None:
-            print("[EXIT] Missing NAV snapshot (account summary) — refusing to place trade.", flush=True)
-            return 2
-
-        raw_units = _compute_units_from_nav(nav_usd=rt.nav_for_sizing, stop_pips=risk.stop_pips, risk_pct=risk_pct)
-        sized_units = max(min_units, min(max_units, abs(raw_units)))
-        units = sized_units if is_long else -sized_units
-
-        sl, tp = _sl_tp_from_mid(mid, is_long=is_long, stop_pips=risk.stop_pips, tp_pips=risk.take_profit_pips)
-        tag = f"fxtrader_candidate_v1_{rt.current_trade_date_ny.date()}"
-
-        print(
-            f"[SIZING] NAV={rt.nav_for_sizing:.2f} risk_pct={risk_pct:.4f} stop_pips={risk.stop_pips:.2f} "
-            f"raw_units={raw_units} clamped_units={sized_units}",
-            flush=True,
-        )
-
-        try:
-            open_before = _trade_ids_snapshot(client)
-        except Exception:
-            open_before = set()
-
-        try:
-            resp = client.place_market_order(
-                instrument=cfg.instrument,
-                units=units,
-                stop_loss_price=sl,
-                take_profit_price=tp,
-                client_tag=tag,
+        except Exception as e:
+            consecutive_stream_failures += 1
+            print(
+                f"[STREAM ERROR] {datetime.now(tz=NY).isoformat()} "
+                f"failure={consecutive_stream_failures} err={type(e).__name__}: {e}",
+                file=sys.stderr,
+                flush=True,
             )
-        except OandaApiError as e:
-            print(f"[ORDER ERROR] {rt.current_trade_date_ny.date()} {e}", file=sys.stderr, flush=True)
+
+            if consecutive_stream_failures >= 5:
+                print("[STREAM ABORT] Too many consecutive unexpected stream errors.", file=sys.stderr, flush=True)
+                return 2
+
+            time.sleep(min(10, 1 + consecutive_stream_failures))
             continue
-
-        trade_id = _extract_trade_id(resp) or _find_new_trade_id_by_diff(client, before_ids=open_before)
-        if not trade_id:
-            print(f"[ORDER WARN] Order placed but could not determine trade_id. resp_keys={list(resp.keys())}", flush=True)
-            return 2
-
-        rt.traded = True
-        rt.trade_id = trade_id
-        rt.trade_open_time_ny = now_ny
-
-        print(
-            f"[ORDER PASS] {rt.current_trade_date_ny.date()} trade_id={trade_id} side={'LONG' if is_long else 'SHORT'} units={units} "
-            f"bid={bid:.5f} ask={ask:.5f} mid={mid:.5f} SL={sl:.5f} TP={tp:.5f} "
-            f"asia_range_pips={decision.asia_range_pips:.2f} sweep_depth_pips={decision.sweep_depth_pips:.2f} "
-            f"sweep={decision.first_sweep_side}@{decision.first_sweep_time_ny} reentry={decision.reentry_time_ny}",
-            flush=True,
-        )
-
-        # do not exit; we’ll monitor until closed or time-stop
-
-    print("[EXIT] stream ended unexpectedly.", file=sys.stderr, flush=True)
-    return 2
 
 
 if __name__ == "__main__":
