@@ -49,12 +49,16 @@ def main() -> None:
             ask = float(asks[0]["price"])
             mid = (bid + ask) / 2.0
 
-            ts = datetime.fromisoformat(msg["time"].replace("Z", "+00:00")).astimezone(NY)
+            ts = datetime.fromisoformat(msg["time"].replace("Z", "+00:00")).astimezone(
+                NY
+            )
             spread_pips = (ask - bid) / PIP_VALUE
         except Exception:
             continue
 
-        print(f"{ts.isoformat()}  bid={bid:.5f} ask={ask:.5f} mid={mid:.5f} spread={spread_pips:.2f}p")
+        print(
+            f"{ts.isoformat()}  bid={bid:.5f} ask={ask:.5f} mid={mid:.5f} spread={spread_pips:.2f}p"
+        )
 
         n += 1
         if n >= 20:

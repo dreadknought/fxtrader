@@ -32,9 +32,13 @@ def _is_weekend_in_new_york(dt_ny: datetime) -> bool:
     return dt_ny.weekday() >= 5
 
 
-def _iter_trading_dates_backwards(end_date_ny: datetime, trading_days: int) -> List[datetime]:
+def _iter_trading_dates_backwards(
+    end_date_ny: datetime, trading_days: int
+) -> List[datetime]:
     dates: List[datetime] = []
-    cursor = end_date_ny.astimezone(NY_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    cursor = end_date_ny.astimezone(NY_TZ).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
 
     while len(dates) < trading_days:
         if not _is_weekend_in_new_york(cursor):
@@ -103,11 +107,15 @@ def _parse_oanda_ohlc_map(payload: dict, price_key: str) -> Dict[datetime, _Ohlc
             continue
         ts = datetime.fromisoformat(c["time"].replace("Z", "+00:00")).astimezone(UTC_TZ)
         p = c[price_key]
-        out[ts] = _Ohlc(o=float(p["o"]), h=float(p["h"]), l=float(p["l"]), c=float(p["c"]))
+        out[ts] = _Ohlc(
+            o=float(p["o"]), h=float(p["h"]), l=float(p["l"]), c=float(p["c"])
+        )
     return out
 
 
-def _synthesize_mid_candles_from_bid_ask(bid_payload: dict, ask_payload: dict) -> List[Candle]:
+def _synthesize_mid_candles_from_bid_ask(
+    bid_payload: dict, ask_payload: dict
+) -> List[Candle]:
     bid = _parse_oanda_ohlc_map(bid_payload, "bid")
     ask = _parse_oanda_ohlc_map(ask_payload, "ask")
     common_ts = sorted(set(bid.keys()) & set(ask.keys()))
@@ -116,11 +124,15 @@ def _synthesize_mid_candles_from_bid_ask(bid_payload: dict, ask_payload: dict) -
     for ts in common_ts:
         b = bid[ts]
         a = ask[ts]
-        candles.append(Candle(timestamp_utc=ts, high=(b.h + a.h) / 2.0, low=(b.l + a.l) / 2.0))
+        candles.append(
+            Candle(timestamp_utc=ts, high=(b.h + a.h) / 2.0, low=(b.l + a.l) / 2.0)
+        )
     return candles
 
 
-def _synthesize_mid_close_map_from_bid_ask(bid_payload: dict, ask_payload: dict) -> Dict[datetime, float]:
+def _synthesize_mid_close_map_from_bid_ask(
+    bid_payload: dict, ask_payload: dict
+) -> Dict[datetime, float]:
     bid = _parse_oanda_ohlc_map(bid_payload, "bid")
     ask = _parse_oanda_ohlc_map(ask_payload, "ask")
     common_ts = set(bid.keys()) & set(ask.keys())
@@ -161,7 +173,10 @@ def _nearest_timestamp_key(
         return target_ts_utc
     for delta_s in (60, -60, 120, -120, 180, -180):
         candidate = target_ts_utc + timedelta(seconds=delta_s)
-        if candidate in ts_map and abs((candidate - target_ts_utc).total_seconds()) <= tolerance_seconds:
+        if (
+            candidate in ts_map
+            and abs((candidate - target_ts_utc).total_seconds()) <= tolerance_seconds
+        ):
             return candidate
     best: Optional[datetime] = None
     best_abs = float("inf")
@@ -173,7 +188,9 @@ def _nearest_timestamp_key(
     return best
 
 
-def _spread_at_time_pips(bid_payload: dict, ask_payload: dict, event_time_ny: datetime) -> Optional[float]:
+def _spread_at_time_pips(
+    bid_payload: dict, ask_payload: dict, event_time_ny: datetime
+) -> Optional[float]:
     if event_time_ny.tzinfo is None:
         event_time_ny = event_time_ny.replace(tzinfo=NY_TZ)
     bid = _parse_oanda_ohlc_map(bid_payload, "bid")
@@ -185,7 +202,10 @@ def _spread_at_time_pips(bid_payload: dict, ask_payload: dict, event_time_ny: da
 
 
 def _p95_spread_in_window_pips(
-    bid_payload: dict, ask_payload: dict, window_start_ny: datetime, window_end_ny: datetime
+    bid_payload: dict,
+    ask_payload: dict,
+    window_start_ny: datetime,
+    window_end_ny: datetime,
 ) -> Optional[float]:
     bid = _parse_oanda_ohlc_map(bid_payload, "bid")
     ask = _parse_oanda_ohlc_map(ask_payload, "ask")
@@ -279,7 +299,9 @@ def _compute_sweep_depth_pips_fixed_0300_0500_ny(
       - else -> max(depth_high, depth_low)
     """
     # NY-local day window (same day)
-    day_ny = trade_date_ny.astimezone(NY_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    day_ny = trade_date_ny.astimezone(NY_TZ).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     start_ny = day_ny.replace(hour=3, minute=0)
     end_ny = day_ny.replace(hour=5, minute=0)
 
@@ -361,7 +383,9 @@ def run_backtest(
     cache = CandleCache(cache_dir) if cache_dir else None
 
     end_date_ny = datetime.now(tz=NY_TZ)
-    trade_dates_ny = _iter_trading_dates_backwards(end_date_ny=end_date_ny, trading_days=trading_days)
+    trade_dates_ny = _iter_trading_dates_backwards(
+        end_date_ny=end_date_ny, trading_days=trading_days
+    )
     if len(trade_dates_ny) > max_requests:
         trade_dates_ny = trade_dates_ny[-max_requests:]
 
@@ -423,14 +447,30 @@ def run_backtest(
             if include_spread:
                 if cache:
                     bid_key = CandleCacheKey(
-                        oanda_env, instrument, granularity, trade_date_str, "B", fetch_start, fetch_end
+                        oanda_env,
+                        instrument,
+                        granularity,
+                        trade_date_str,
+                        "B",
+                        fetch_start,
+                        fetch_end,
                     )
                     ask_key = CandleCacheKey(
-                        oanda_env, instrument, granularity, trade_date_str, "A", fetch_start, fetch_end
+                        oanda_env,
+                        instrument,
+                        granularity,
+                        trade_date_str,
+                        "A",
+                        fetch_start,
+                        fetch_end,
                     )
 
-                    bid_payload, bid_hit = _cache_get(cache, key=bid_key, fetch_fn=lambda: _fetch("B"))
-                    ask_payload, ask_hit = _cache_get(cache, key=ask_key, fetch_fn=lambda: _fetch("A"))
+                    bid_payload, bid_hit = _cache_get(
+                        cache, key=bid_key, fetch_fn=lambda: _fetch("B")
+                    )
+                    ask_payload, ask_hit = _cache_get(
+                        cache, key=ask_key, fetch_fn=lambda: _fetch("A")
+                    )
 
                     cache_hits += int(bid_hit) + int(ask_hit)
                     cache_misses += int(not bid_hit) + int(not ask_hit)
@@ -451,10 +491,15 @@ def run_backtest(
 
                 candles = _synthesize_mid_candles_from_bid_ask(bid_payload, ask_payload)
                 candles_count = len(candles)
-                mid_close_map_utc = _synthesize_mid_close_map_from_bid_ask(bid_payload, ask_payload)
+                mid_close_map_utc = _synthesize_mid_close_map_from_bid_ask(
+                    bid_payload, ask_payload
+                )
 
                 spread_avg, spread_p95, spread_max = _london_spread_stats_pips(
-                    bid_payload, ask_payload, london_window_start_ny, london_window_end_ny
+                    bid_payload,
+                    ask_payload,
+                    london_window_start_ny,
+                    london_window_end_ny,
                 )
 
                 asia_range = compute_asia_range(
@@ -474,10 +519,14 @@ def run_backtest(
                 )
 
                 if classification.first_sweep_time_ny is not None:
-                    spread_at_sweep = _spread_at_time_pips(bid_payload, ask_payload, classification.first_sweep_time_ny)
+                    spread_at_sweep = _spread_at_time_pips(
+                        bid_payload, ask_payload, classification.first_sweep_time_ny
+                    )
 
                 if classification.reentry_time_ny is not None:
-                    spread_at_reentry = _spread_at_time_pips(bid_payload, ask_payload, classification.reentry_time_ny)
+                    spread_at_reentry = _spread_at_time_pips(
+                        bid_payload, ask_payload, classification.reentry_time_ny
+                    )
                     spread_p95_5m_after_reentry = _p95_spread_in_window_pips(
                         bid_payload,
                         ask_payload,
@@ -485,13 +534,20 @@ def run_backtest(
                         classification.reentry_time_ny + timedelta(minutes=5),
                     )
                     favorable_30m, adverse_30m = _excursions_30m_after_reentry_pips(
-                        mid_close_map_utc, candles, classification.reentry_time_ny, classification.first_sweep_side
+                        mid_close_map_utc,
+                        candles,
+                        classification.reentry_time_ny,
+                        classification.first_sweep_side,
                     )
                     if favorable_30m is not None and spread_at_reentry is not None:
-                        net_favorable_after_cost_30m = favorable_30m - (2.0 * spread_at_reentry)
+                        net_favorable_after_cost_30m = favorable_30m - (
+                            2.0 * spread_at_reentry
+                        )
 
                 # NEW: compute gate metrics (needs mid candles; include_spread ensures we have them)
-                asia_range_pips = (classification.asia_high - classification.asia_low) / PIP_VALUE
+                asia_range_pips = (
+                    classification.asia_high - classification.asia_low
+                ) / PIP_VALUE
                 sweep_depth_pips = _compute_sweep_depth_pips_fixed_0300_0500_ny(
                     trade_date_ny=trade_date_ny,
                     candles=candles,
@@ -505,14 +561,27 @@ def run_backtest(
                 # NOTE: without BID/ASK we can't reproduce your sweep-depth metric reliably,
                 # but we can still compute Asia range. Sweep depth will be blank.
                 if cache:
-                    mid_key = CandleCacheKey(oanda_env, instrument, granularity, trade_date_str, "M", fetch_start, fetch_end)
-                    mid_payload, mid_hit = _cache_get(cache, key=mid_key, fetch_fn=lambda: _fetch("M"))
+                    mid_key = CandleCacheKey(
+                        oanda_env,
+                        instrument,
+                        granularity,
+                        trade_date_str,
+                        "M",
+                        fetch_start,
+                        fetch_end,
+                    )
+                    mid_payload, mid_hit = _cache_get(
+                        cache, key=mid_key, fetch_fn=lambda: _fetch("M")
+                    )
                     cache_hits += int(mid_hit)
                     cache_misses += int(not mid_hit)
                     api_calls += int(not mid_hit)
                     did_network = not mid_hit
                     if cache_verbose and (idx == 1 or did_network):
-                        print(f"[CACHE] {trade_date_str} M={'HIT' if mid_hit else 'MISS'}", flush=True)
+                        print(
+                            f"[CACHE] {trade_date_str} M={'HIT' if mid_hit else 'MISS'}",
+                            flush=True,
+                        )
                 else:
                     mid_payload = _fetch("M")
                     api_calls += 1
@@ -537,15 +606,23 @@ def run_backtest(
                     evaluate_double_sweep_until_ny=double_sweep_check_end_ny,
                 )
 
-                asia_range_pips = (classification.asia_high - classification.asia_low) / PIP_VALUE
-                sweep_depth_pips = None  # requires BID/ASK mid synth for parity with your research
+                asia_range_pips = (
+                    classification.asia_high - classification.asia_low
+                ) / PIP_VALUE
+                sweep_depth_pips = (
+                    None  # requires BID/ASK mid synth for parity with your research
+                )
 
-            class_counts[classification.day_class] = class_counts.get(classification.day_class, 0) + 1
+            class_counts[classification.day_class] = (
+                class_counts.get(classification.day_class, 0) + 1
+            )
             ok_days += 1
 
             # NEW: decide "signal" and apply gates.
             # "Signal" here mirrors your overlap usage: mean reversion setup with a reentry time.
-            signals = (classification.day_class == "MEAN_REVERSION") and (classification.reentry_time_ny is not None)
+            signals = (classification.day_class == "MEAN_REVERSION") and (
+                classification.reentry_time_ny is not None
+            )
 
             if not signals:
                 took_trade = 0
@@ -584,15 +661,25 @@ def run_backtest(
                 "asia_high": f"{classification.asia_high:.5f}",
                 "asia_low": f"{classification.asia_low:.5f}",
                 "first_sweep_side": classification.first_sweep_side or "",
-                "first_sweep_time_ny": classification.first_sweep_time_ny.isoformat()
-                if classification.first_sweep_time_ny
-                else "",
-                "reentry_time_ny": classification.reentry_time_ny.isoformat() if classification.reentry_time_ny else "",
+                "first_sweep_time_ny": (
+                    classification.first_sweep_time_ny.isoformat()
+                    if classification.first_sweep_time_ny
+                    else ""
+                ),
+                "reentry_time_ny": (
+                    classification.reentry_time_ny.isoformat()
+                    if classification.reentry_time_ny
+                    else ""
+                ),
                 "double_sweep": str(classification.double_sweep),
                 "day_class": classification.day_class,
                 # NEW columns:
-                "asia_range_pips": "" if asia_range_pips is None else f"{asia_range_pips:.3f}",
-                "sweep_depth_pips": "" if sweep_depth_pips is None else f"{sweep_depth_pips:.3f}",
+                "asia_range_pips": (
+                    "" if asia_range_pips is None else f"{asia_range_pips:.3f}"
+                ),
+                "sweep_depth_pips": (
+                    "" if sweep_depth_pips is None else f"{sweep_depth_pips:.3f}"
+                ),
                 "signals": "1" if signals else "0",
                 "took_trade": str(int(took_trade)),
                 "gate_reason": gate_reason,
@@ -601,19 +688,39 @@ def run_backtest(
             if include_spread:
                 row.update(
                     {
-                        "london_spread_avg_pips": "" if spread_avg is None else f"{spread_avg:.3f}",
-                        "london_spread_p95_pips": "" if spread_p95 is None else f"{spread_p95:.3f}",
-                        "london_spread_max_pips": "" if spread_max is None else f"{spread_max:.3f}",
-                        "spread_at_sweep_pips": "" if spread_at_sweep is None else f"{spread_at_sweep:.3f}",
-                        "spread_at_reentry_pips": "" if spread_at_reentry is None else f"{spread_at_reentry:.3f}",
-                        "spread_p95_5m_after_reentry_pips": ""
-                        if spread_p95_5m_after_reentry is None
-                        else f"{spread_p95_5m_after_reentry:.3f}",
-                        "favorable_excursion_30m_pips": "" if favorable_30m is None else f"{favorable_30m:.1f}",
-                        "adverse_excursion_30m_pips": "" if adverse_30m is None else f"{adverse_30m:.1f}",
-                        "net_favorable_after_cost_30m_pips": ""
-                        if net_favorable_after_cost_30m is None
-                        else f"{net_favorable_after_cost_30m:.1f}",
+                        "london_spread_avg_pips": (
+                            "" if spread_avg is None else f"{spread_avg:.3f}"
+                        ),
+                        "london_spread_p95_pips": (
+                            "" if spread_p95 is None else f"{spread_p95:.3f}"
+                        ),
+                        "london_spread_max_pips": (
+                            "" if spread_max is None else f"{spread_max:.3f}"
+                        ),
+                        "spread_at_sweep_pips": (
+                            "" if spread_at_sweep is None else f"{spread_at_sweep:.3f}"
+                        ),
+                        "spread_at_reentry_pips": (
+                            ""
+                            if spread_at_reentry is None
+                            else f"{spread_at_reentry:.3f}"
+                        ),
+                        "spread_p95_5m_after_reentry_pips": (
+                            ""
+                            if spread_p95_5m_after_reentry is None
+                            else f"{spread_p95_5m_after_reentry:.3f}"
+                        ),
+                        "favorable_excursion_30m_pips": (
+                            "" if favorable_30m is None else f"{favorable_30m:.1f}"
+                        ),
+                        "adverse_excursion_30m_pips": (
+                            "" if adverse_30m is None else f"{adverse_30m:.1f}"
+                        ),
+                        "net_favorable_after_cost_30m_pips": (
+                            ""
+                            if net_favorable_after_cost_30m is None
+                            else f"{net_favorable_after_cost_30m:.1f}"
+                        ),
                     }
                 )
 
@@ -674,16 +781,16 @@ def run_backtest(
         "reentry_deadline_minutes",
         "asia_high",
         "asia_low",
-        "asia_range_pips",   # NEW
+        "asia_range_pips",  # NEW
         "first_sweep_side",
         "first_sweep_time_ny",
         "reentry_time_ny",
         "sweep_depth_pips",  # NEW
         "double_sweep",
         "day_class",
-        "signals",           # NEW
-        "took_trade",        # NEW
-        "gate_reason",       # NEW
+        "signals",  # NEW
+        "took_trade",  # NEW
+        "gate_reason",  # NEW
     ]
     if include_spread:
         fieldnames += [
@@ -710,7 +817,9 @@ def run_backtest(
     print(f"Trading days attempted: {len(trade_dates_ny)}")
     print(f"API calls made: {api_calls}")
     if cache:
-        print(f"Cache hits: {cache_hits}  Cache misses: {cache_misses}  Cache dir: {cache_dir}")
+        print(
+            f"Cache hits: {cache_hits}  Cache misses: {cache_misses}  Cache dir: {cache_dir}"
+        )
     print(f"Errors: {total_errors}")
     print(f"Output CSV: {output_csv_path}")
 
@@ -720,7 +829,13 @@ def run_backtest(
         print(f"gate_min_asia_range_pips: {gate_min_asia_range_pips}")
 
     if total_labeled > 0:
-        for k in ["MEAN_REVERSION", "TREND", "DOUBLE_SWEEP", "RANGE_INSIDE", "MARKET_CLOSED"]:
+        for k in [
+            "MEAN_REVERSION",
+            "TREND",
+            "DOUBLE_SWEEP",
+            "RANGE_INSIDE",
+            "MARKET_CLOSED",
+        ]:
             count = class_counts.get(k, 0)
             pct = (count / total_labeled) * 100.0
             print(f"{k:14s}: {count:4d}  ({pct:5.1f}%)")

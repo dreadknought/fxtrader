@@ -115,7 +115,9 @@ def main() -> int:
     rows = load_rows(path)
 
     # Filter to days where spread stats exist (MARKET_CLOSED may have blanks)
-    rows_with_spread = [r for r in rows if r.spread_avg is not None and r.spread_p95 is not None]
+    rows_with_spread = [
+        r for r in rows if r.spread_avg is not None and r.spread_p95 is not None
+    ]
 
     all_avg = [r.spread_avg for r in rows_with_spread if r.spread_avg is not None]
     all_p95 = [r.spread_p95 for r in rows_with_spread if r.spread_p95 is not None]
@@ -134,22 +136,34 @@ def main() -> int:
     by_class_max: Dict[str, List[float]] = defaultdict(list)
 
     for r in rows_with_spread:
-        by_class_avg[r.day_class].append(r.spread_avg)   # type: ignore[arg-type]
-        by_class_p95[r.day_class].append(r.spread_p95)   # type: ignore[arg-type]
+        by_class_avg[r.day_class].append(r.spread_avg)  # type: ignore[arg-type]
+        by_class_p95[r.day_class].append(r.spread_p95)  # type: ignore[arg-type]
         if r.spread_max is not None:
             by_class_max[r.day_class].append(r.spread_max)
 
     for cls in sorted(by_class_avg.keys()):
-        _print_summary(f"{cls} - London spread AVG (pips)", _summarize(by_class_avg[cls]))
-        _print_summary(f"{cls} - London spread P95 (pips)", _summarize(by_class_p95[cls]))
-        _print_summary(f"{cls} - London spread MAX (pips)", _summarize(by_class_max.get(cls, [])))
+        _print_summary(
+            f"{cls} - London spread AVG (pips)", _summarize(by_class_avg[cls])
+        )
+        _print_summary(
+            f"{cls} - London spread P95 (pips)", _summarize(by_class_p95[cls])
+        )
+        _print_summary(
+            f"{cls} - London spread MAX (pips)", _summarize(by_class_max.get(cls, []))
+        )
 
     # Sweep vs non-sweep
     sweep_days = [r for r in rows_with_spread if r.first_sweep_side]
     nosweep_days = [r for r in rows_with_spread if not r.first_sweep_side]
 
-    _print_summary("SWEEP days - London spread P95 (pips)", _summarize([r.spread_p95 for r in sweep_days if r.spread_p95 is not None]))
-    _print_summary("NO-SWEEP days - London spread P95 (pips)", _summarize([r.spread_p95 for r in nosweep_days if r.spread_p95 is not None]))
+    _print_summary(
+        "SWEEP days - London spread P95 (pips)",
+        _summarize([r.spread_p95 for r in sweep_days if r.spread_p95 is not None]),
+    )
+    _print_summary(
+        "NO-SWEEP days - London spread P95 (pips)",
+        _summarize([r.spread_p95 for r in nosweep_days if r.spread_p95 is not None]),
+    )
 
     # Cost sanity buckets on P95 (how often spreads are nasty)
     buckets = [0.6, 0.8, 1.0, 1.5, 2.0]

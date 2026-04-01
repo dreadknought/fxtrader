@@ -24,9 +24,10 @@ from typing import Iterable, List, Literal, Optional, Tuple
 from dateutil import parser
 from zoneinfo import ZoneInfo
 
-
 # Note: Backtest will also emit MARKET_CLOSED when we have no candles in the Asia window.
-DayClass = Literal["MEAN_REVERSION", "TREND", "DOUBLE_SWEEP", "RANGE_INSIDE", "MARKET_CLOSED"]
+DayClass = Literal[
+    "MEAN_REVERSION", "TREND", "DOUBLE_SWEEP", "RANGE_INSIDE", "MARKET_CLOSED"
+]
 SweepSide = Literal["HIGH", "LOW"]
 
 
@@ -49,6 +50,7 @@ class Candle:
       - high
       - low
     """
+
     timestamp_utc: datetime
     high: float
     low: float
@@ -57,6 +59,7 @@ class Candle:
 @dataclass(frozen=True)
 class AsiaRange:
     """Computed Asia session range and the time window used."""
+
     asia_window_start_ny: datetime
     asia_window_end_ny: datetime
     asia_high: float
@@ -71,6 +74,7 @@ class AsiaRange:
 @dataclass(frozen=True)
 class ClassificationResult:
     """Final label plus useful metadata for logging/backtesting."""
+
     day_class: DayClass
     asia_high: float
     asia_low: float
@@ -216,7 +220,9 @@ def classify_london_day(
 
     # --- 2) After first sweep, look for re-entry before deadline ---
     assert first_sweep_time_ny is not None
-    reentry_deadline_ny = first_sweep_time_ny + timedelta(minutes=reentry_deadline_minutes)
+    reentry_deadline_ny = first_sweep_time_ny + timedelta(
+        minutes=reentry_deadline_minutes
+    )
 
     for candle in sorted_candles:
         candle_time_ny = _to_new_york_time(candle.timestamp_utc)

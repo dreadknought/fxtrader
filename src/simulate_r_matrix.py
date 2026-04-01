@@ -61,11 +61,11 @@ class Ohlc:
 
 @dataclass(frozen=True)
 class CandleSeries:
-    ts: List[datetime]          # UTC timestamps (ascending)
+    ts: List[datetime]  # UTC timestamps (ascending)
     mid_high: List[float]
     mid_low: List[float]
     mid_close: List[float]
-    spread_pips: List[float]    # spread at close (ask_close - bid_close)
+    spread_pips: List[float]  # spread at close (ask_close - bid_close)
 
 
 @dataclass
@@ -73,6 +73,7 @@ class OutcomeCounts:
     """
     We store fractional counts to support the neutral intrabar assumption.
     """
+
     n: float = 0.0
     tp: float = 0.0
     sl: float = 0.0
@@ -109,7 +110,9 @@ def _parse_oanda_ohlc_map(payload: dict, price_key: str) -> Dict[datetime, Ohlc]
             continue
         ts = datetime.fromisoformat(c["time"].replace("Z", "+00:00")).astimezone(UTC_TZ)
         p = c[price_key]
-        out[ts] = Ohlc(o=float(p["o"]), h=float(p["h"]), l=float(p["l"]), c=float(p["c"]))
+        out[ts] = Ohlc(
+            o=float(p["o"]), h=float(p["h"]), l=float(p["l"]), c=float(p["c"])
+        )
     return out
 
 
@@ -121,7 +124,14 @@ def _load_cached_payload(
     trade_date_ny: str,
     price: str,
 ) -> dict:
-    path = cache_dir / oanda_env / instrument / granularity / trade_date_ny / f"{price}.json"
+    path = (
+        cache_dir
+        / oanda_env
+        / instrument
+        / granularity
+        / trade_date_ny
+        / f"{price}.json"
+    )
     obj = json.loads(path.read_text())
     return obj["payload"]
 
@@ -146,7 +156,13 @@ def _build_series_from_bid_ask(bid_payload: dict, ask_payload: dict) -> CandleSe
         mid_close.append((b.c + a.c) / 2.0)
         spread_pips.append((a.c - b.c) / PIP_VALUE)
 
-    return CandleSeries(ts=ts, mid_high=mid_high, mid_low=mid_low, mid_close=mid_close, spread_pips=spread_pips)
+    return CandleSeries(
+        ts=ts,
+        mid_high=mid_high,
+        mid_low=mid_low,
+        mid_close=mid_close,
+        spread_pips=spread_pips,
+    )
 
 
 def _to_float(s: str) -> Optional[float]:
@@ -173,7 +189,9 @@ def _find_index_at_or_after(series: CandleSeries, t_utc: datetime) -> Optional[i
     return None
 
 
-def _window_end_index(series: CandleSeries, start_idx: int, horizon_minutes: int) -> int:
+def _window_end_index(
+    series: CandleSeries, start_idx: int, horizon_minutes: int
+) -> int:
     start_ts = series.ts[start_idx]
     end_ts = start_ts + timedelta(minutes=horizon_minutes)
     end_idx = start_idx
@@ -280,9 +298,17 @@ def _compute_sweep_extreme(
             continue
 
         if series.mid_high[i] > upper:
-            sweep_high = series.mid_high[i] if sweep_high is None else max(sweep_high, series.mid_high[i])
+            sweep_high = (
+                series.mid_high[i]
+                if sweep_high is None
+                else max(sweep_high, series.mid_high[i])
+            )
         if series.mid_low[i] < lower:
-            sweep_low = series.mid_low[i] if sweep_low is None else min(sweep_low, series.mid_low[i])
+            sweep_low = (
+                series.mid_low[i]
+                if sweep_low is None
+                else min(sweep_low, series.mid_low[i])
+            )
 
     return sweep_high, sweep_low
 
@@ -353,15 +379,27 @@ def _simulate_structure_stop_all_ambiguity_modes(
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--labels-csv", required=True, help="Labels CSV (e.g. out/grid/EUR_USD_d250_buf3_re10.csv)")
+    ap.add_argument(
+        "--labels-csv",
+        required=True,
+        help="Labels CSV (e.g. out/grid/EUR_USD_d250_buf3_re10.csv)",
+    )
     ap.add_argument("--cache-dir", default="out/candle_cache")
     ap.add_argument("--oanda-env", default="practice")
     ap.add_argument("--instrument", default="EUR_USD")
     ap.add_argument("--granularity", default="M1")
 
-    ap.add_argument("--horizons", default="30,60,90,180", help="Comma minutes (default: 30,60,90,180)")
+    ap.add_argument(
+        "--horizons",
+        default="30,60,90,180",
+        help="Comma minutes (default: 30,60,90,180)",
+    )
     ap.add_argument("--targets", default="1,2", help="Comma R values (default: 1,2)")
-    ap.add_argument("--fixed-stops", default="8,10,12,15,20,25", help="Comma pip stops for fixed model")
+    ap.add_argument(
+        "--fixed-stops",
+        default="8,10,12,15,20,25",
+        help="Comma pip stops for fixed model",
+    )
 
     ap.add_argument("--out-summary", default="out/r_matrix_summary.csv")
     ap.add_argument("--top", type=int, default=15)
@@ -411,12 +449,31 @@ def main() -> int:
         asia_high = _to_float(r.get("asia_high", ""))
         asia_low = _to_float(r.get("asia_low", ""))
 
-        if reentry_time_ny is None or sweep_side not in ("HIGH", "LOW") or asia_high is None or asia_low is None:
+        if (
+            reentry_time_ny is None
+            or sweep_side not in ("HIGH", "LOW")
+            or asia_high is None
+            or asia_low is None
+        ):
             continue
 
         # Load candles from cache
-        bid_payload = _load_cached_payload(cache_dir, args.oanda_env, args.instrument, args.granularity, trade_date, "B")
-        ask_payload = _load_cached_payload(cache_dir, args.oanda_env, args.instrument, args.granularity, trade_date, "A")
+        bid_payload = _load_cached_payload(
+            cache_dir,
+            args.oanda_env,
+            args.instrument,
+            args.granularity,
+            trade_date,
+            "B",
+        )
+        ask_payload = _load_cached_payload(
+            cache_dir,
+            args.oanda_env,
+            args.instrument,
+            args.granularity,
+            trade_date,
+            "A",
+        )
         series = _build_series_from_bid_ask(bid_payload, ask_payload)
 
         entry_idx = _find_index_at_or_after(series, reentry_time_ny.astimezone(UTC_TZ))
@@ -426,7 +483,9 @@ def main() -> int:
         direction = "SHORT" if sweep_side == "HIGH" else "LONG"
 
         # London window (03:00-05:00 NY)
-        trade_day_ny = datetime.fromisoformat(trade_date + "T00:00:00").replace(tzinfo=NY_TZ)
+        trade_day_ny = datetime.fromisoformat(trade_date + "T00:00:00").replace(
+            tzinfo=NY_TZ
+        )
         london_start_ny = trade_day_ny.replace(hour=3, minute=0)
         london_end_ny = trade_day_ny.replace(hour=5, minute=0)
 

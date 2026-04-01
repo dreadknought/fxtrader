@@ -198,7 +198,9 @@ def evaluate_decision(
 
     # deadline check
     deadline = state.first_sweep_time_ny.replace()  # copy
-    deadline = deadline + __import__("datetime").timedelta(minutes=gate.reentry_deadline_minutes)
+    deadline = deadline + __import__("datetime").timedelta(
+        minutes=gate.reentry_deadline_minutes
+    )
     if state.reentry_time_ny > deadline:
         return Decision(
             should_trade=False,

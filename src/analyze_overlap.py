@@ -36,7 +36,7 @@ class Ohlc:
 
 @dataclass(frozen=True)
 class CandleSeries:
-    ts: List[datetime]          # UTC timestamps ascending
+    ts: List[datetime]  # UTC timestamps ascending
     mid_high: List[float]
     mid_low: List[float]
     mid_close: List[float]
@@ -110,8 +110,22 @@ def _load_labels(path: Path) -> Dict[str, LabelRow]:
     return out
 
 
-def _load_cached_payload(cache_dir: Path, oanda_env: str, instrument: str, granularity: str, trade_date_ny: str, price: str) -> dict:
-    p = cache_dir / oanda_env / instrument / granularity / trade_date_ny / f"{price}.json"
+def _load_cached_payload(
+    cache_dir: Path,
+    oanda_env: str,
+    instrument: str,
+    granularity: str,
+    trade_date_ny: str,
+    price: str,
+) -> dict:
+    p = (
+        cache_dir
+        / oanda_env
+        / instrument
+        / granularity
+        / trade_date_ny
+        / f"{price}.json"
+    )
     obj = json.loads(p.read_text())
     return obj["payload"]
 
@@ -155,7 +169,9 @@ def _find_index_at_or_after(series: CandleSeries, t_utc: datetime) -> Optional[i
     return None
 
 
-def _window_end_index(series: CandleSeries, start_idx: int, horizon_minutes: int) -> int:
+def _window_end_index(
+    series: CandleSeries, start_idx: int, horizon_minutes: int
+) -> int:
     start_ts = series.ts[start_idx]
     end_ts = start_ts + timedelta(minutes=horizon_minutes)
     end_idx = start_idx
@@ -182,7 +198,9 @@ def _compute_sweep_extreme(
     upper = asia_high + buf
     lower = asia_low - buf
 
-    trade_day_ny = datetime.fromisoformat(trade_date_ny + "T00:00:00").replace(tzinfo=NY_TZ)
+    trade_day_ny = datetime.fromisoformat(trade_date_ny + "T00:00:00").replace(
+        tzinfo=NY_TZ
+    )
     london_start_ny = trade_day_ny.replace(hour=3, minute=0)
     london_end_ny = trade_day_ny.replace(hour=5, minute=0)
 
@@ -195,14 +213,24 @@ def _compute_sweep_extreme(
             continue
 
         if series.mid_high[i] > upper:
-            sweep_high = series.mid_high[i] if sweep_high is None else max(sweep_high, series.mid_high[i])
+            sweep_high = (
+                series.mid_high[i]
+                if sweep_high is None
+                else max(sweep_high, series.mid_high[i])
+            )
         if series.mid_low[i] < lower:
-            sweep_low = series.mid_low[i] if sweep_low is None else min(sweep_low, series.mid_low[i])
+            sweep_low = (
+                series.mid_low[i]
+                if sweep_low is None
+                else min(sweep_low, series.mid_low[i])
+            )
 
     return sweep_high, sweep_low
 
 
-def _intrabar_flags(direction: str, hi: float, lo: float, stop_price: float, target_price: float) -> Tuple[bool, bool]:
+def _intrabar_flags(
+    direction: str, hi: float, lo: float, stop_price: float, target_price: float
+) -> Tuple[bool, bool]:
     if direction == "LONG":
         return (lo <= stop_price, hi >= target_price)
     return (hi >= stop_price, lo <= target_price)
@@ -275,8 +303,12 @@ def _add_outcome(counts: OutcomeCounts, outcome: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--labels-a", required=True, help="CSV for pool A (e.g. buf=1 re=10)")
-    ap.add_argument("--labels-b", required=True, help="CSV for pool B (e.g. buf=3 re=10)")
+    ap.add_argument(
+        "--labels-a", required=True, help="CSV for pool A (e.g. buf=1 re=10)"
+    )
+    ap.add_argument(
+        "--labels-b", required=True, help="CSV for pool B (e.g. buf=3 re=10)"
+    )
     ap.add_argument("--cache-dir", default="out/candle_cache")
     ap.add_argument("--oanda-env", default="practice")
     ap.add_argument("--instrument", default="EUR_USD")
@@ -300,14 +332,38 @@ def main() -> int:
     # Conditional EV stats (structure-stop R=1 horizon=90)
     # We compute per-day outcomes using cached data.
     # Keep three ambiguity modes.
-    a_all = {"worst": OutcomeCounts(), "neutral": OutcomeCounts(), "best": OutcomeCounts()}
-    b_all = {"worst": OutcomeCounts(), "neutral": OutcomeCounts(), "best": OutcomeCounts()}
+    a_all = {
+        "worst": OutcomeCounts(),
+        "neutral": OutcomeCounts(),
+        "best": OutcomeCounts(),
+    }
+    b_all = {
+        "worst": OutcomeCounts(),
+        "neutral": OutcomeCounts(),
+        "best": OutcomeCounts(),
+    }
 
-    a_given_b = {"worst": OutcomeCounts(), "neutral": OutcomeCounts(), "best": OutcomeCounts()}
-    a_given_not_b = {"worst": OutcomeCounts(), "neutral": OutcomeCounts(), "best": OutcomeCounts()}
+    a_given_b = {
+        "worst": OutcomeCounts(),
+        "neutral": OutcomeCounts(),
+        "best": OutcomeCounts(),
+    }
+    a_given_not_b = {
+        "worst": OutcomeCounts(),
+        "neutral": OutcomeCounts(),
+        "best": OutcomeCounts(),
+    }
 
-    b_given_a = {"worst": OutcomeCounts(), "neutral": OutcomeCounts(), "best": OutcomeCounts()}
-    b_given_not_a = {"worst": OutcomeCounts(), "neutral": OutcomeCounts(), "best": OutcomeCounts()}
+    b_given_a = {
+        "worst": OutcomeCounts(),
+        "neutral": OutcomeCounts(),
+        "best": OutcomeCounts(),
+    }
+    b_given_not_a = {
+        "worst": OutcomeCounts(),
+        "neutral": OutcomeCounts(),
+        "best": OutcomeCounts(),
+    }
 
     def is_signal(x: Optional[LabelRow]) -> bool:
         return (
@@ -345,8 +401,22 @@ def main() -> int:
                 continue
 
             assert row is not None
-            bid_payload = _load_cached_payload(cache_dir, args.oanda_env, args.instrument, args.granularity, row.date_ny, "B")
-            ask_payload = _load_cached_payload(cache_dir, args.oanda_env, args.instrument, args.granularity, row.date_ny, "A")
+            bid_payload = _load_cached_payload(
+                cache_dir,
+                args.oanda_env,
+                args.instrument,
+                args.granularity,
+                row.date_ny,
+                "B",
+            )
+            ask_payload = _load_cached_payload(
+                cache_dir,
+                args.oanda_env,
+                args.instrument,
+                args.granularity,
+                row.date_ny,
+                "A",
+            )
             series = _build_mid_series(bid_payload, ask_payload)
 
             entry_idx = _find_index_at_or_after(series, row.reentry_time_ny.astimezone(UTC_TZ))  # type: ignore[union-attr]
@@ -357,7 +427,7 @@ def main() -> int:
                 series=series,
                 trade_date_ny=row.date_ny,
                 asia_high=row.asia_high,  # type: ignore[arg-type]
-                asia_low=row.asia_low,    # type: ignore[arg-type]
+                asia_low=row.asia_low,  # type: ignore[arg-type]
                 buffer_pips=row.sweep_buffer_pips,
             )
 
@@ -421,7 +491,16 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     with out_path.open("w", newline="") as f:
-        fieldnames = ["date_ny", "pool", "buffer_pips", "sweep_side", "outcome_worst", "outcome_neutral", "outcome_best", "both_signals"]
+        fieldnames = [
+            "date_ny",
+            "pool",
+            "buffer_pips",
+            "sweep_side",
+            "outcome_worst",
+            "outcome_neutral",
+            "outcome_best",
+            "both_signals",
+        ]
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(out_rows)

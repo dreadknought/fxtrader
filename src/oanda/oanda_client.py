@@ -17,11 +17,12 @@ class OandaConfig:
       - OANDA_ENV == "live" => live
       - anything else       => practice
     """
+
     api_key: str
-    base_url: str       # REST host
-    stream_url: str     # STREAM host
+    base_url: str  # REST host
+    stream_url: str  # STREAM host
     account_id: str
-    env: str            # "live" or "practice"
+    env: str  # "live" or "practice"
 
 
 class OandaApiError(RuntimeError):
@@ -48,7 +49,7 @@ def _parse_env_line(line: str) -> Optional[Tuple[str, str]]:
         return None
 
     if s.startswith("export "):
-        s = s[len("export "):].strip()
+        s = s[len("export ") :].strip()
 
     if "=" not in s:
         return None
@@ -106,7 +107,12 @@ def _maybe_load_env() -> None:
       - By default, does NOT override existing os.environ values.
       - To override, set FXTRADER_ENV_OVERRIDE=1.
     """
-    override = (os.environ.get("FXTRADER_ENV_OVERRIDE") or "").strip() in {"1", "true", "yes", "y"}
+    override = (os.environ.get("FXTRADER_ENV_OVERRIDE") or "").strip() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+    }
 
     explicit = (os.environ.get("FXTRADER_ENV_FILE") or "").strip()
     if explicit:
@@ -127,22 +133,42 @@ def load_oanda_config() -> OandaConfig:
     is_live = env_raw == "live"
     env = "live" if is_live else "practice"
 
-    api_key = (os.environ.get("OANDA_LIVE_KEY") if is_live else os.environ.get("OANDA_PRACTICE_KEY") or "").strip()
+    api_key = (
+        os.environ.get("OANDA_LIVE_KEY")
+        if is_live
+        else os.environ.get("OANDA_PRACTICE_KEY") or ""
+    ).strip()
     if not api_key:
         missing = "OANDA_LIVE_KEY" if is_live else "OANDA_PRACTICE_KEY"
         raise ValueError(f"Missing {missing} (OANDA_ENV={env_raw!r} -> env={env!r}).")
 
     account_id = (
-        os.environ.get("OANDA_LIVE_ACCOUNT_ID") if is_live else os.environ.get("OANDA_PRACTICE_ACCOUNT_ID") or ""
+        os.environ.get("OANDA_LIVE_ACCOUNT_ID")
+        if is_live
+        else os.environ.get("OANDA_PRACTICE_ACCOUNT_ID") or ""
     ).strip()
     if not account_id:
         missing = "OANDA_LIVE_ACCOUNT_ID" if is_live else "OANDA_PRACTICE_ACCOUNT_ID"
         raise ValueError(f"Missing {missing} (OANDA_ENV={env_raw!r} -> env={env!r}).")
 
-    base_url = "https://api-fxtrade.oanda.com" if is_live else "https://api-fxpractice.oanda.com"
-    stream_url = "https://stream-fxtrade.oanda.com" if is_live else "https://stream-fxpractice.oanda.com"
+    base_url = (
+        "https://api-fxtrade.oanda.com"
+        if is_live
+        else "https://api-fxpractice.oanda.com"
+    )
+    stream_url = (
+        "https://stream-fxtrade.oanda.com"
+        if is_live
+        else "https://stream-fxpractice.oanda.com"
+    )
 
-    return OandaConfig(api_key=api_key, base_url=base_url, stream_url=stream_url, account_id=account_id, env=env)
+    return OandaConfig(
+        api_key=api_key,
+        base_url=base_url,
+        stream_url=stream_url,
+        account_id=account_id,
+        env=env,
+    )
 
 
 class OandaClient:
@@ -175,34 +201,48 @@ class OandaClient:
     def account_id(self) -> str:
         return self._config.account_id
 
-    def _get_json(self, url: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _get_json(
+        self, url: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         r = self._session.get(url, params=params, timeout=self._timeout_seconds)
         if not r.ok:
             try:
                 payload = r.json()
             except Exception:
                 payload = {"raw_text": r.text}
-            raise OandaApiError(f"OANDA GET failed: {r.status_code} {r.reason} url={url} params={params} payload={payload}")
+            raise OandaApiError(
+                f"OANDA GET failed: {r.status_code} {r.reason} url={url} params={params} payload={payload}"
+            )
         return r.json()
 
     def _post_json(self, url: str, body: Dict[str, Any]) -> Dict[str, Any]:
-        r = self._session.post(url, data=json.dumps(body), timeout=self._timeout_seconds)
+        r = self._session.post(
+            url, data=json.dumps(body), timeout=self._timeout_seconds
+        )
         if not r.ok:
             try:
                 payload = r.json()
             except Exception:
                 payload = {"raw_text": r.text}
-            raise OandaApiError(f"OANDA POST failed: {r.status_code} {r.reason} url={url} body={body} payload={payload}")
+            raise OandaApiError(
+                f"OANDA POST failed: {r.status_code} {r.reason} url={url} body={body} payload={payload}"
+            )
         return r.json()
 
-    def _put_json(self, url: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        r = self._session.put(url, data=json.dumps(body or {}), timeout=self._timeout_seconds)
+    def _put_json(
+        self, url: str, body: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        r = self._session.put(
+            url, data=json.dumps(body or {}), timeout=self._timeout_seconds
+        )
         if not r.ok:
             try:
                 payload = r.json()
             except Exception:
                 payload = {"raw_text": r.text}
-            raise OandaApiError(f"OANDA PUT failed: {r.status_code} {r.reason} url={url} body={body} payload={payload}")
+            raise OandaApiError(
+                f"OANDA PUT failed: {r.status_code} {r.reason} url={url} body={body} payload={payload}"
+            )
         return r.json()
 
     # ------------------------
@@ -230,7 +270,9 @@ class OandaClient:
     # ------------------------
     # STREAM: Pricing
     # ------------------------
-    def stream_pricing(self, *, instruments: str) -> Generator[Dict[str, Any], None, None]:
+    def stream_pricing(
+        self, *, instruments: str
+    ) -> Generator[Dict[str, Any], None, None]:
         url = f"{self._config.stream_url}/v3/accounts/{self._config.account_id}/pricing/stream"
         params = {"instruments": instruments}
 
@@ -296,15 +338,18 @@ class OandaClient:
           - price
           - unrealizedPL
         """
-        url = f"{self._config.base_url}/v3/accounts/{self._config.account_id}/openTrades"
+        url = (
+            f"{self._config.base_url}/v3/accounts/{self._config.account_id}/openTrades"
+        )
         payload = self._get_json(url)
         return payload.get("trades", [])
 
     def close_trade(self, *, trade_id: str) -> Dict[str, Any]:
         url = f"{self._config.base_url}/v3/accounts/{self._config.account_id}/trades/{trade_id}/close"
         return self._put_json(url, body={})
-    
+
         # ------------------------
+
     # REST: Account + Transactions
     # ------------------------
     def get_account_summary(self) -> Dict[str, Any]:

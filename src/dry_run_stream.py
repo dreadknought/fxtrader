@@ -7,7 +7,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from src.oanda.oanda_client import OandaClient, load_oanda_config
-from src.strategy.gated_strategy import GateConfig, LiveState, evaluate_decision, update_state_from_tick
+from src.strategy.gated_strategy import (
+    GateConfig,
+    LiveState,
+    evaluate_decision,
+    update_state_from_tick,
+)
 
 NY = ZoneInfo("America/New_York")
 UTC = ZoneInfo("UTC")
@@ -42,7 +47,9 @@ def main() -> int:
     instrument = os.environ.get("FX_INSTRUMENT", "EUR_USD").strip()
     account_id = (os.environ.get("OANDA_ACCOUNT_ID") or "").strip()
     if not account_id:
-        print("Missing OANDA_ACCOUNT_ID (required for pricing stream).", file=sys.stderr)
+        print(
+            "Missing OANDA_ACCOUNT_ID (required for pricing stream).", file=sys.stderr
+        )
         return 2
 
     gate = GateConfig(
@@ -56,7 +63,9 @@ def main() -> int:
     client = OandaClient(config)
 
     # Per-day state
-    current_trade_date_ny = datetime.now(tz=NY).replace(hour=0, minute=0, second=0, microsecond=0)
+    current_trade_date_ny = datetime.now(tz=NY).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     state = LiveState()
 
     printed_pass_for_day = False

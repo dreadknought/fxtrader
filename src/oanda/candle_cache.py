@@ -13,7 +13,7 @@ class CandleCacheKey:
     instrument: str
     granularity: str
     trade_date_ny: str  # YYYY-MM-DD
-    price: str          # "A" | "B" | "M"
+    price: str  # "A" | "B" | "M"
     time_from_rfc3339: str
     time_to_rfc3339: str
 
@@ -23,7 +23,13 @@ class CandleCache:
         self._cache_dir = cache_dir
 
     def _path_for_key(self, key: CandleCacheKey) -> Path:
-        base = self._cache_dir / key.oanda_env / key.instrument / key.granularity / key.trade_date_ny
+        base = (
+            self._cache_dir
+            / key.oanda_env
+            / key.instrument
+            / key.granularity
+            / key.trade_date_ny
+        )
         base.mkdir(parents=True, exist_ok=True)
         return base / f"{key.price}.json"
 
@@ -74,7 +80,9 @@ class CandleCache:
         obj = {"meta": self._meta_dict(key), "payload": payload}
         path.write_text(json.dumps(obj, separators=(",", ":"), ensure_ascii=False))
 
-    def get_or_fetch(self, *, key: CandleCacheKey, fetch_fn) -> Tuple[Dict[str, Any], bool]:
+    def get_or_fetch(
+        self, *, key: CandleCacheKey, fetch_fn
+    ) -> Tuple[Dict[str, Any], bool]:
         cached = self.load_if_valid(key)
         if cached is not None:
             return cached, True

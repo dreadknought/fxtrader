@@ -66,7 +66,14 @@ def _load_cached_payload(
     trade_date_ny: str,
     price: str,
 ) -> dict:
-    p = cache_dir / oanda_env / instrument / granularity / trade_date_ny / f"{price}.json"
+    p = (
+        cache_dir
+        / oanda_env
+        / instrument
+        / granularity
+        / trade_date_ny
+        / f"{price}.json"
+    )
     obj = json.loads(p.read_text())
     return obj["payload"]
 
@@ -122,7 +129,9 @@ def _compute_sweep_extreme_0300_0500_ny(
     upper = asia_high + buf
     lower = asia_low - buf
 
-    trade_day_ny = datetime.fromisoformat(trade_date_ny + "T00:00:00").replace(tzinfo=NY_TZ)
+    trade_day_ny = datetime.fromisoformat(trade_date_ny + "T00:00:00").replace(
+        tzinfo=NY_TZ
+    )
     london_start_ny = trade_day_ny.replace(hour=3, minute=0)
     london_end_ny = trade_day_ny.replace(hour=5, minute=0)
 
@@ -135,9 +144,17 @@ def _compute_sweep_extreme_0300_0500_ny(
             continue
 
         if series.mid_high[i] > upper:
-            sweep_high = series.mid_high[i] if sweep_high is None else max(sweep_high, series.mid_high[i])
+            sweep_high = (
+                series.mid_high[i]
+                if sweep_high is None
+                else max(sweep_high, series.mid_high[i])
+            )
         if series.mid_low[i] < lower:
-            sweep_low = series.mid_low[i] if sweep_low is None else min(sweep_low, series.mid_low[i])
+            sweep_low = (
+                series.mid_low[i]
+                if sweep_low is None
+                else min(sweep_low, series.mid_low[i])
+            )
 
     return sweep_high, sweep_low
 
@@ -160,7 +177,9 @@ def _quantile_edges(series: pd.Series, bins: int) -> List[float]:
 
 def _bucket(series: pd.Series, edges: List[float], bins: int) -> pd.Series:
     labels = [f"Q{i+1}" for i in range(bins)]
-    return pd.cut(series.astype(float), bins=edges, labels=labels, include_lowest=True, right=True)
+    return pd.cut(
+        series.astype(float), bins=edges, labels=labels, include_lowest=True, right=True
+    )
 
 
 def _ev(series: pd.Series) -> float:
@@ -198,7 +217,10 @@ def _ev(series: pd.Series) -> float:
         return float("nan")
     return float(vals.mean())
 
-def _load_overlap_outcomes_day_level(overlap_csv: Path, which_outcome: str) -> pd.DataFrame:
+
+def _load_overlap_outcomes_day_level(
+    overlap_csv: Path, which_outcome: str
+) -> pd.DataFrame:
     """
     overlap CSV is one row per (date_ny, pool). Presence implies pool signaled.
     Creates one row per date with:
@@ -210,7 +232,9 @@ def _load_overlap_outcomes_day_level(overlap_csv: Path, which_outcome: str) -> p
     required = {"date_ny", "pool", f"outcome_{which_outcome}", "both_signals"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError(f"overlap_outcomes missing columns: {sorted(missing)}. Got: {df.columns.tolist()}")
+        raise ValueError(
+            f"overlap_outcomes missing columns: {sorted(missing)}. Got: {df.columns.tolist()}"
+        )
 
     df["_pool"] = df["pool"].astype(str).str.upper().str.strip()
     df["_both"] = df["both_signals"].apply(_to_bool)
@@ -219,7 +243,9 @@ def _load_overlap_outcomes_day_level(overlap_csv: Path, which_outcome: str) -> p
     day = pd.DataFrame({"date_ny": pools_by_date.index})
     day["a_signals"] = ["A" in ss for ss in pools_by_date.values]
     day["b_signals"] = ["B" in ss for ss in pools_by_date.values]
-    day["both_signals"] = df.groupby("date_ny")["_both"].any().reindex(day["date_ny"]).values
+    day["both_signals"] = (
+        df.groupby("date_ny")["_both"].any().reindex(day["date_ny"]).values
+    )
 
     def _group(row) -> str:
         a = bool(row["a_signals"])
@@ -235,7 +261,9 @@ def _load_overlap_outcomes_day_level(overlap_csv: Path, which_outcome: str) -> p
     day["group"] = day.apply(_group, axis=1)
 
     a_rows = df[df["_pool"] == "A"][["date_ny", f"outcome_{which_outcome}"]].copy()
-    a_rows = a_rows.rename(columns={f"outcome_{which_outcome}": "a_outcome"}).drop_duplicates(subset=["date_ny"])
+    a_rows = a_rows.rename(
+        columns={f"outcome_{which_outcome}": "a_outcome"}
+    ).drop_duplicates(subset=["date_ny"])
     day = day.merge(a_rows, on="date_ny", how="left")
 
     return day
@@ -265,14 +293,26 @@ def _load_labels(labels_csv: Path) -> pd.DataFrame:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--overlap-outcomes", required=True, help="CSV from src.analyze_overlap --out-csv")
+    ap.add_argument(
+        "--overlap-outcomes",
+        required=True,
+        help="CSV from src.analyze_overlap --out-csv",
+    )
     ap.add_argument("--labels-a", required=True, help="A labels CSV (spread-enabled)")
-    ap.add_argument("--cache-dir", required=True, help="Candle cache dir (e.g., out/candle_cache)")
-    ap.add_argument("--oanda-env", required=True, help="practice or live (matches cache path)")
+    ap.add_argument(
+        "--cache-dir", required=True, help="Candle cache dir (e.g., out/candle_cache)"
+    )
+    ap.add_argument(
+        "--oanda-env", required=True, help="practice or live (matches cache path)"
+    )
     ap.add_argument("--instrument", required=True, help="e.g., EUR_USD")
     ap.add_argument("--granularity", default="M1", help="e.g., M1 (matches cache path)")
-    ap.add_argument("--which-outcome", choices=["worst", "neutral", "best"], default="neutral")
-    ap.add_argument("--spread-metric", choices=["p95_5m", "at_reentry"], default="p95_5m")
+    ap.add_argument(
+        "--which-outcome", choices=["worst", "neutral", "best"], default="neutral"
+    )
+    ap.add_argument(
+        "--spread-metric", choices=["p95_5m", "at_reentry"], default="p95_5m"
+    )
     ap.add_argument("--bins", type=int, default=3)
     ap.add_argument("--out-per-day", default="out/stratified_per_day.csv")
     ap.add_argument("--out-csv", default="out/stratified_ev.csv")
@@ -289,11 +329,15 @@ def main() -> None:
     merged = day.set_index("date_ny").join(labels, how="left")
 
     # Asia range in pips (EUR_USD pip size per repo)
-    merged["asia_range_pips"] = (merged["asia_high"].astype(float) - merged["asia_low"].astype(float)) / PIP_VALUE
+    merged["asia_range_pips"] = (
+        merged["asia_high"].astype(float) - merged["asia_low"].astype(float)
+    ) / PIP_VALUE
 
     # Spread metric selection
     if args.spread_metric == "p95_5m":
-        merged["spread_metric"] = merged["spread_p95_5m_after_reentry_pips"].astype(float)
+        merged["spread_metric"] = merged["spread_p95_5m_after_reentry_pips"].astype(
+            float
+        )
     else:
         merged["spread_metric"] = merged["spread_at_reentry_pips"].astype(float)
 
@@ -315,8 +359,22 @@ def main() -> None:
             continue
 
         try:
-            bid_payload = _load_cached_payload(cache_dir, args.oanda_env, args.instrument, args.granularity, trade_date_ny, "B")
-            ask_payload = _load_cached_payload(cache_dir, args.oanda_env, args.instrument, args.granularity, trade_date_ny, "A")
+            bid_payload = _load_cached_payload(
+                cache_dir,
+                args.oanda_env,
+                args.instrument,
+                args.granularity,
+                trade_date_ny,
+                "B",
+            )
+            ask_payload = _load_cached_payload(
+                cache_dir,
+                args.oanda_env,
+                args.instrument,
+                args.granularity,
+                trade_date_ny,
+                "A",
+            )
         except Exception:
             # cache miss / file missing
             miss_count += 1
@@ -374,7 +432,9 @@ def main() -> None:
     filt = merged["a_outcome"].notna()
     agg = (
         merged[filt]
-        .groupby(["group", "asia_bin", "sweep_bin", "spread_bin"], dropna=False)["a_outcome"]
+        .groupby(["group", "asia_bin", "sweep_bin", "spread_bin"], dropna=False)[
+            "a_outcome"
+        ]
         .agg(n="count", ev=_ev)
         .reset_index()
         .sort_values(["ev", "n"], ascending=[False, False])
@@ -390,7 +450,9 @@ def main() -> None:
     print(f"Sweep edges: {edges.sweep}")
     print(f"Spread edges:{edges.spread}")
     if miss_count:
-        print(f"[WARN] Missing cache for {miss_count} dates (sweep_depth_pips set to NaN).")
+        print(
+            f"[WARN] Missing cache for {miss_count} dates (sweep_depth_pips set to NaN)."
+        )
     print()
     print("=== Top buckets (A outcome EV) ===")
     for grp in ["a_only", "overlap", "b_only"]:

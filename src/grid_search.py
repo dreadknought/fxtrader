@@ -162,8 +162,12 @@ def main() -> int:
     ap.add_argument("--days", type=int, default=250)
     ap.add_argument("--granularity", default="M1")
 
-    ap.add_argument("--buffers", default="1,2,3,5", help="Comma list of sweep buffers in pips.")
-    ap.add_argument("--reentries", default="10,20,30,45", help="Comma list of reentry minutes.")
+    ap.add_argument(
+        "--buffers", default="1,2,3,5", help="Comma list of sweep buffers in pips."
+    )
+    ap.add_argument(
+        "--reentries", default="10,20,30,45", help="Comma list of reentry minutes."
+    )
 
     ap.add_argument("--out-dir", default="out/grid")
     ap.add_argument("--summary", default="out/grid_summary.csv")
@@ -172,7 +176,11 @@ def main() -> int:
     ap.add_argument("--sleep", type=float, default=0.05)
     ap.add_argument("--progress-every", type=int, default=25)
 
-    ap.add_argument("--cache-dir", default="out/candle_cache", help="Cache dir for candle JSON. Use empty to disable.")
+    ap.add_argument(
+        "--cache-dir",
+        default="out/candle_cache",
+        help="Cache dir for candle JSON. Use empty to disable.",
+    )
     args = ap.parse_args()
 
     buffers = [float(x.strip()) for x in args.buffers.split(",") if x.strip()]
@@ -184,7 +192,9 @@ def main() -> int:
     cache_dir = Path(args.cache_dir) if args.cache_dir else None
 
     combos = [(b, r) for b in buffers for r in reentries]
-    print(f"Running {len(combos)} permutations with caching={'ON' if cache_dir else 'OFF'}")
+    print(
+        f"Running {len(combos)} permutations with caching={'ON' if cache_dir else 'OFF'}"
+    )
 
     summary_rows: List[Dict[str, str]] = []
 

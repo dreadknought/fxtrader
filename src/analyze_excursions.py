@@ -87,7 +87,9 @@ def _bucket_rates(vals: List[float], thresholds: List[float]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("csv_path", type=str, nargs="?", default="out/labels_spread_excursions.csv")
+    ap.add_argument(
+        "csv_path", type=str, nargs="?", default="out/labels_spread_excursions.csv"
+    )
     args = ap.parse_args()
 
     path = Path(args.csv_path)
@@ -126,11 +128,22 @@ def main() -> int:
 
             mr_rows += 1
 
-            spread_at_reentry.append(_to_float(r.get("spread_at_reentry_pips", "")) or float("nan"))
-            spread_p95_5m.append(_to_float(r.get("spread_p95_5m_after_reentry_pips", "")) or float("nan"))
-            favorable_30m.append(_to_float(r.get("favorable_excursion_30m_pips", "")) or float("nan"))
-            adverse_30m.append(_to_float(r.get("adverse_excursion_30m_pips", "")) or float("nan"))
-            net_30m.append(_to_float(r.get("net_favorable_after_cost_30m_pips", "")) or float("nan"))
+            spread_at_reentry.append(
+                _to_float(r.get("spread_at_reentry_pips", "")) or float("nan")
+            )
+            spread_p95_5m.append(
+                _to_float(r.get("spread_p95_5m_after_reentry_pips", "")) or float("nan")
+            )
+            favorable_30m.append(
+                _to_float(r.get("favorable_excursion_30m_pips", "")) or float("nan")
+            )
+            adverse_30m.append(
+                _to_float(r.get("adverse_excursion_30m_pips", "")) or float("nan")
+            )
+            net_30m.append(
+                _to_float(r.get("net_favorable_after_cost_30m_pips", ""))
+                or float("nan")
+            )
 
     print(f"Loaded rows: {rows}")
     print(f"MEAN_REVERSION rows with reentry: {mr_rows}")
