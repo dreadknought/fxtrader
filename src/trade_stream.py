@@ -300,10 +300,23 @@ def _summarize_trade_pnl_from_transactions(
         f"commission={commission:.2f}",
         f"net={pl + financing - commission:.2f}",
     ]
+
     if balance_snapshot is not None and bal_now is not None:
-        parts.append(f"balance: {balance_snapshot:.2f} -> {bal_now:.2f} (Δ{(bal_now - balance_snapshot):+.2f})")
+        balance_delta = bal_now - balance_snapshot
+        balance_pct = (balance_delta / balance_snapshot * 100.0) if balance_snapshot != 0 else None
+        balance_part = f"balance: {balance_snapshot:.2f} -> {bal_now:.2f} ({balance_delta:+.2f})"
+        if balance_pct is not None:
+            balance_part += f" [{balance_pct:+.4f}%]"
+        parts.append(balance_part)
+
     if nav_snapshot is not None and nav_now is not None:
-        parts.append(f"NAV: {nav_snapshot:.2f} -> {nav_now:.2f} (Δ{(nav_now - nav_snapshot):+.2f})")
+        nav_delta = nav_now - nav_snapshot
+        nav_pct = (nav_delta / nav_snapshot * 100.0) if nav_snapshot != 0 else None
+        nav_part = f"NAV: {nav_snapshot:.2f} -> {nav_now:.2f} ({nav_delta:+.2f})"
+        if nav_pct is not None:
+            nav_part += f" [{nav_pct:+.4f}%]"
+        parts.append(nav_part)
+
     return " | ".join(parts)
 
 
