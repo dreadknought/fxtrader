@@ -43,7 +43,8 @@ Get-Content $EnvFile | ForEach-Object {
 $lockStream = $null
 try {
     $lockStream = [System.IO.File]::Open($LockFile, 'OpenOrCreate', 'ReadWrite', 'None')
-} catch {
+}
+catch {
     $msg = "{0} another fxtrader instance is running; exiting." -f (Get-Date -Format "s")
     $msg | Tee-Object -FilePath $AggLog -Append | Tee-Object -FilePath $DateLog -Append
     exit 0
@@ -58,19 +59,42 @@ try {
     Write-Log ""
     Write-Log ("===== {0} fxtrader run start =====" -f (Get-Date -Format "s"))
 
-    & uv run python -m src.trade_stream 2>&1 |
-        ForEach-Object {
-            Write-Log "$_"
+    $stdoutFile = Join-Path $env:TEMP ("fxtrader_trade_stream_stdout_{0}_{1}.log" -f $PID, ([guid]::NewGuid().ToString("N")))
+    $stderrFile = Join-Path $env:TEMP ("fxtrader_trade_stream_stderr_{0}_{1}.log" -f $PID, ([guid]::NewGuid().ToString("N")))
+
+    try {
+        # Do not pipe the Python process through ForEach-Object.
+        # Let the child process write to plain files, then ingest those files after it exits.
+        & uv run python -m src.trade_stream 1> $stdoutFile 2> $stderrFile
+        $exitCode = $LASTEXITCODE
+
+        if (Test-Path $stdoutFile) {
+            Get-Content $stdoutFile | ForEach-Object {
+                Write-Log "$_"
+            }
         }
 
-    $exitCode = $LASTEXITCODE
+        if (Test-Path $stderrFile) {
+            Get-Content $stderrFile | ForEach-Object {
+                Write-Log "$_"
+            }
+        }
 
-    if ($exitCode -ne 0) {
-        Write-Log ("===== {0} fxtrader run failed (exit {1}) =====" -f (Get-Date -Format "s"), $exitCode)
-        exit $exitCode
+        if ($exitCode -ne 0) {
+            Write-Log ("===== {0} fxtrader run failed (exit {1}) =====" -f (Get-Date -Format "s"), $exitCode)
+            exit $exitCode
+        }
+
+        Write-Log ("===== {0} fxtrader run end =====" -f (Get-Date -Format "s"))
     }
-
-    Write-Log ("===== {0} fxtrader run end =====" -f (Get-Date -Format "s"))
+    finally {
+        if (Test-Path $stdoutFile) {
+            Remove-Item $stdoutFile -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $stderrFile) {
+            Remove-Item $stderrFile -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 catch {
     Write-Log ("===== {0} fxtrader wrapper exception =====" -f (Get-Date -Format "s"))

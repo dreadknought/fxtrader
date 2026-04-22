@@ -1,13 +1,16 @@
-# file: src/oanda/oanda_client.py
+# C:\Users\dread\dev\fxtrader\src\oanda\oanda_client.py
+
 from __future__ import annotations
 
 import json
 import os
+import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional, Tuple
 
 import requests
+from requests.adapters import HTTPAdapter
 
 
 @dataclass(frozen=True)
@@ -107,7 +110,7 @@ def _maybe_load_env() -> None:
       - By default, does NOT override existing os.environ values.
       - To override, set FXTRADER_ENV_OVERRIDE=1.
     """
-    override = (os.environ.get("FXTRADER_ENV_OVERRIDE") or "").strip() in {
+    override = (os.environ.get("FXTRADER_ENV_OVERRIDE") or "").strip().lower() in {
         "1",
         "true",
         "yes",
@@ -171,10 +174,45 @@ def load_oanda_config() -> OandaConfig:
     )
 
 
+class _TCPKeepAliveAdapter(HTTPAdapter):
+    """
+    Small adapter that enables TCP keepalive where the platform supports it.
+    This does not guarantee prevention of stream disconnects, but it can help
+    long-lived sockets fail less dumbly through intermediaries/NATs.
+    """
+
+    def init_poolmanager(self, *args, **kwargs):
+        socket_options = list(HTTPAdapter().socket_options)
+
+        # Enable SO_KEEPALIVE where available.
+        if hasattr(socket, "SO_KEEPALIVE"):
+            socket_options.append((socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1))
+
+        # Linux-specific keepalive tuning, guarded so Windows/macOS do not explode.
+        if hasattr(socket, "TCP_KEEPIDLE"):
+            socket_options.append((socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, 30))
+        if hasattr(socket, "TCP_KEEPINTVL"):
+            socket_options.append((socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, 10))
+        if hasattr(socket, "TCP_KEEPCNT"):
+            socket_options.append((socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3))
+
+        kwargs["socket_options"] = socket_options
+        return super().init_poolmanager(*args, **kwargs)
+
+
 class OandaClient:
-    def __init__(self, config: OandaConfig, timeout_seconds: int = 20) -> None:
+    def __init__(
+        self,
+        config: OandaConfig,
+        *,
+        rest_timeout_seconds: int = 20,
+        stream_connect_timeout_seconds: int = 20,
+        stream_read_timeout_seconds: int = 90,
+    ) -> None:
         self._config = config
-        self._timeout_seconds = timeout_seconds
+        self._rest_timeout_seconds = rest_timeout_seconds
+        self._stream_connect_timeout_seconds = stream_connect_timeout_seconds
+        self._stream_read_timeout_seconds = stream_read_timeout_seconds
 
         self._session = requests.Session()
         self._session.headers.update(
@@ -184,6 +222,11 @@ class OandaClient:
                 "Content-Type": "application/json",
             }
         )
+
+        # Mount adapters for both REST and streaming hosts.
+        adapter = _TCPKeepAliveAdapter(pool_connections=10, pool_maxsize=10)
+        self._session.mount("https://", adapter)
+        self._session.mount("http://", adapter)
 
     @property
     def env(self) -> str:
@@ -204,7 +247,7 @@ class OandaClient:
     def _get_json(
         self, url: str, params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        r = self._session.get(url, params=params, timeout=self._timeout_seconds)
+        r = self._session.get(url, params=params, timeout=self._rest_timeout_seconds)
         if not r.ok:
             try:
                 payload = r.json()
@@ -217,7 +260,7 @@ class OandaClient:
 
     def _post_json(self, url: str, body: Dict[str, Any]) -> Dict[str, Any]:
         r = self._session.post(
-            url, data=json.dumps(body), timeout=self._timeout_seconds
+            url, data=json.dumps(body), timeout=self._rest_timeout_seconds
         )
         if not r.ok:
             try:
@@ -233,7 +276,7 @@ class OandaClient:
         self, url: str, body: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         r = self._session.put(
-            url, data=json.dumps(body or {}), timeout=self._timeout_seconds
+            url, data=json.dumps(body or {}), timeout=self._rest_timeout_seconds
         )
         if not r.ok:
             try:
@@ -276,7 +319,15 @@ class OandaClient:
         url = f"{self._config.stream_url}/v3/accounts/{self._config.account_id}/pricing/stream"
         params = {"instruments": instruments}
 
-        with self._session.get(url, params=params, stream=True, timeout=60) as r:
+        with self._session.get(
+            url,
+            params=params,
+            stream=True,
+            timeout=(
+                self._stream_connect_timeout_seconds,
+                self._stream_read_timeout_seconds,
+            ),
+        ) as r:
             if not r.ok:
                 try:
                     payload = r.json()
@@ -289,10 +340,17 @@ class OandaClient:
             for raw_line in r.iter_lines(decode_unicode=True):
                 if not raw_line:
                     continue
+
                 try:
-                    yield json.loads(raw_line)
+                    msg = json.loads(raw_line)
                 except json.JSONDecodeError:
+                    # Ignore junk lines, but do not pretend they are impossible.
+                    # The caller owns reconnect logic; malformed single lines should
+                    # not kill the whole worker.
                     continue
+
+                if isinstance(msg, dict):
+                    yield msg
 
     # ------------------------
     # REST: Orders
@@ -348,8 +406,7 @@ class OandaClient:
         url = f"{self._config.base_url}/v3/accounts/{self._config.account_id}/trades/{trade_id}/close"
         return self._put_json(url, body={})
 
-        # ------------------------
-
+    # ------------------------
     # REST: Account + Transactions
     # ------------------------
     def get_account_summary(self) -> Dict[str, Any]:

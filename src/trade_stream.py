@@ -1,4 +1,5 @@
-# file: src/trade_stream.py
+# C:\Users\dread\dev\fxtrader\src\trade_stream.py
+
 from __future__ import annotations
 
 import sys
@@ -587,7 +588,7 @@ def _process_stream_message(
 
     if rt.nav_for_sizing is None:
         print(
-            "[EXIT] Missing NAV snapshot (account summary) — refusing to place trade.",
+            "[EXIT] Missing NAV snapshot (account summary) - refusing to place trade.",
             flush=True,
         )
         return rt, 2
@@ -756,7 +757,6 @@ def main() -> int:
             print(
                 f"[STREAM DROPPED] {datetime.now(tz=NY).isoformat()} "
                 f"failure={consecutive_stream_failures} err={type(e).__name__}: {e}",
-                file=sys.stderr,
                 flush=True,
             )
 
