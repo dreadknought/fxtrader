@@ -1,0 +1,29 @@
+[
+  {
+    "name": "fxtrader",
+    "image": "${IMAGE_URI}",
+    "essential": true,
+    "command": [
+      "/app/scripts/fargate-entrypoint.sh"
+    ],
+    "environment": [
+      { "name": "OANDA_ENV", "value": "${OANDA_ENV}" },
+      { "name": "ENABLE_LIVE_TRADING", "value": "${ENABLE_LIVE_TRADING}" },
+      { "name": "FXTRADER_ENTRYPOINT", "value": "src.trade_stream" }
+    ],
+    "secrets": [
+      { "name": "OANDA_PRACTICE_KEY", "valueFrom": "${SECRET_ARN}:OANDA_PRACTICE_KEY::" },
+      { "name": "OANDA_PRACTICE_ACCOUNT_ID", "valueFrom": "${SECRET_ARN}:OANDA_PRACTICE_ACCOUNT_ID::" },
+      { "name": "OANDA_LIVE_KEY", "valueFrom": "${SECRET_ARN}:OANDA_LIVE_KEY::" },
+      { "name": "OANDA_LIVE_ACCOUNT_ID", "valueFrom": "${SECRET_ARN}:OANDA_LIVE_ACCOUNT_ID::" }
+    ],
+    "logConfiguration": {
+      "logDriver": "awslogs",
+      "options": {
+        "awslogs-group": "/ecs/fxtrader",
+        "awslogs-region": "${AWS_REGION}",
+        "awslogs-stream-prefix": "fxtrader"
+      }
+    }
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "family": "fxtrader",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "executionRoleArn": "__TASK_EXECUTION_ROLE_ARN__",
+  "containerDefinitions": __CONTAINER_DEFINITIONS__
+}

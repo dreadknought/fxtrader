@@ -12,6 +12,27 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 import requests
 from requests.adapters import HTTPAdapter
 
+# src/oanda/oanda_client.py
+
+def _response_payload_preview(response, max_chars: int = 500) -> dict:
+    body = response.text or ""
+
+    content_type = response.headers.get("content-type", "")
+    request_id = (
+        response.headers.get("requestid")
+        or response.headers.get("request-id")
+        or response.headers.get("x-request-id")
+    )
+
+    return {
+        "status_code": response.status_code,
+        "reason": response.reason,
+        "content_type": content_type,
+        "request_id": request_id,
+        "body_length": len(body),
+        "body_preview": body[:max_chars].replace("\n", "\\n"),
+    }
+    
 
 @dataclass(frozen=True)
 class OandaConfig:
@@ -177,12 +198,11 @@ def load_oanda_config() -> OandaConfig:
 class _TCPKeepAliveAdapter(HTTPAdapter):
     """
     Small adapter that enables TCP keepalive where the platform supports it.
-    This does not guarantee prevention of stream disconnects, but it can help
-    long-lived sockets fail less dumbly through intermediaries/NATs.
+    This can help long-lived sockets fail less dumbly through intermediaries/NATs.
     """
 
-    def init_poolmanager(self, *args, **kwargs):
-        socket_options = list(HTTPAdapter().socket_options)
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        socket_options = []
 
         # Enable SO_KEEPALIVE where available.
         if hasattr(socket, "SO_KEEPALIVE"):
@@ -196,8 +216,12 @@ class _TCPKeepAliveAdapter(HTTPAdapter):
         if hasattr(socket, "TCP_KEEPCNT"):
             socket_options.append((socket.IPPROTO_TCP, socket.TCP_KEEPCNT, 3))
 
-        kwargs["socket_options"] = socket_options
-        return super().init_poolmanager(*args, **kwargs)
+        if socket_options:
+            pool_kwargs["socket_options"] = socket_options
+
+        return super().init_poolmanager(
+            connections, maxsize, block=block, **pool_kwargs
+        )
 
 
 class OandaClient:
@@ -252,7 +276,7 @@ class OandaClient:
             try:
                 payload = r.json()
             except Exception:
-                payload = {"raw_text": r.text}
+                payload = _response_payload_preview(r)
             raise OandaApiError(
                 f"OANDA GET failed: {r.status_code} {r.reason} url={url} params={params} payload={payload}"
             )
@@ -266,7 +290,7 @@ class OandaClient:
             try:
                 payload = r.json()
             except Exception:
-                payload = {"raw_text": r.text}
+                payload = _response_payload_preview(r)
             raise OandaApiError(
                 f"OANDA POST failed: {r.status_code} {r.reason} url={url} body={body} payload={payload}"
             )
@@ -282,7 +306,7 @@ class OandaClient:
             try:
                 payload = r.json()
             except Exception:
-                payload = {"raw_text": r.text}
+                payload = _response_payload_preview(r)
             raise OandaApiError(
                 f"OANDA PUT failed: {r.status_code} {r.reason} url={url} body={body} payload={payload}"
             )
@@ -332,7 +356,7 @@ class OandaClient:
                 try:
                     payload = r.json()
                 except Exception:
-                    payload = {"raw_text": r.text}
+                    payload = _response_payload_preview(r)
                 raise OandaApiError(
                     f"OANDA pricing stream failed: {r.status_code} {r.reason} url={url} params={params} payload={payload}"
                 )

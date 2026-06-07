@@ -63,10 +63,15 @@ try {
     $stderrFile = Join-Path $env:TEMP ("fxtrader_trade_stream_stderr_{0}_{1}.log" -f $PID, ([guid]::NewGuid().ToString("N")))
 
     try {
-        # Do not pipe the Python process through ForEach-Object.
-        # Let the child process write to plain files, then ingest those files after it exits.
-        & uv run python -m src.trade_stream 1> $stdoutFile 2> $stderrFile
-        $exitCode = $LASTEXITCODE
+        $proc = Start-Process `
+            -FilePath "uv" `
+            -ArgumentList @("run", "python", "-m", "src.trade_stream") `
+            -WorkingDirectory $RepoDir `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdoutFile `
+            -RedirectStandardError $stderrFile
 
         if (Test-Path $stdoutFile) {
             Get-Content $stdoutFile | ForEach-Object {
@@ -79,6 +84,8 @@ try {
                 Write-Log "$_"
             }
         }
+
+        $exitCode = $proc.ExitCode
 
         if ($exitCode -ne 0) {
             Write-Log ("===== {0} fxtrader run failed (exit {1}) =====" -f (Get-Date -Format "s"), $exitCode)
